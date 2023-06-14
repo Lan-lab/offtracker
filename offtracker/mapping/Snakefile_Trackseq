@@ -11,7 +11,6 @@ name2 = nametype + '.' + suffix
 
 import os
 
-#所有的输出列表
 
 rule all:
     input:
@@ -173,21 +172,4 @@ rule bdg2bw_rv:
         os.path.join(output_dir,"{sample}.rv.scaled.bw")
     shell:
         "{params.dir_script}/bedGraphToBigWig {input} {params.gl} {output}"
-
-#rule bwAdd:
-#    input:
-#        fw=os.path.join(output_dir,"{sample}.fw.scaled.bw"),
-#        rv=os.path.join(output_dir,"{sample}.rv.scaled.bw")
-#    threads:
-#        _threads
-#    output:
-#        os.path.join(output_dir,"{sample}." + BinSize + ".add.bdg")
-#    shell:
-#        """
-#        bigwigCompare --binSize {BinSize} -p {threads} --verbose -o {output} \
-#        --outFileFormat bedgraph \
-#        --bigwig1 {input.fw} \
-#        --bigwig2 {input.rv} \
-#        --operation add 
-#        """
 

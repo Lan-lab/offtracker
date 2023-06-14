@@ -67,8 +67,11 @@ offtracker_config.py -t 8 -g hg38 --blacklist hg38 \
 -r /Your_Path_To_Reference/hg38_genome.fa \
 -i /Your_Path_To_Reference/hg38_genome.chromap.index \
 -f /Your_Path_To_Fastq \
--o /Your_Path_To_Output \ # Default is outputting to /Your_Path_To_Fastq
---subfolder 0 # If different samples are in seperate folders, set this to 1
+-o /Your_Path_To_Output \ 
+--subfolder 0 
+
+# --subfolder: If different samples are in seperate folders, set this to 1
+# -o: Default is outputting to /Your_Path_To_Fastq
 
 # Run the snakemake program
 cd /Your_Path_To_Fastq
@@ -91,12 +94,16 @@ Analyzing the off-target sites
 ```bash
 # In this part, multiple samples in the same condition can be analyzed in a single run by pattern recogonization of sample names
 
-offtracker_analysis.py -g hg38 --name "HEK4" \ # the same as that in offtracker_candidates.py
---exp 'Cas9_HEK4.*293' \ # add one or multiple patterns of file name in regex
---control 'control' \ # add one or multiple patterns of file name in regex
+offtracker_analysis.py -g hg38 --name "HEK4" \
+--exp 'Cas9_HEK4.*293' \
+--control 'control' \
 --outname 'Cas9_HEK4_293' \
 -f /Your_Path_To_Output \
 --seqfolder /Your_Path_To_Candidates
+
+# --name: the same as that in offtracker_candidates.py
+# --exp/--control: add one or multiple patterns of file name in regex
+
 
 # This step will generate Trackseq_result_{outname}.csv
 # Intermediate files are saved in ./temp folder, which can be deleted 
