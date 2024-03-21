@@ -1,14 +1,17 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# 2023.10.27. v2.0: 2.0以target_location midpoint为中心，因此取消 pct 计算
+# 2023.12.06. v2.1: 2.1增加 cleavage_site 推测, 修正 deletion 错位, 以 cleavage_site 为中心
 import os,sys,re,time
+from itertools import product
 
 if sys.version_info < (3,0):
     import platform
     raise Exception(f'python3 is needed, while running {platform.python_version()} now')
 
 import offtracker
-from offtracker.X_general import *
+import offtracker.X_sequence as xseq
 script_dir = os.path.abspath(os.path.dirname(offtracker.__file__))
 script_folder= os.path.join(script_dir, 'mapping')
 
@@ -28,10 +31,9 @@ def main():
     parser.add_argument('-b','--blastdb', type=str, required=True, help='blast database')
     parser.add_argument('-o','--outdir' , type=str, required=True, help='The output folder')
     parser.add_argument('-g','--genome' , type=str, default='hg38', help='File of chromosome sizes, or "hg38", "mm10" ')
-    parser.add_argument('-t','--thread' , type=int, default=4,     help='Number of threads to be used')
+    parser.add_argument('-t','--thread' , type=int, default=4,     help='Number of threads for parallel computing')
     parser.add_argument('--quick_mode'  , action='store_true',  help='BLAST faster but less candidates.')
-    parser.add_argument('--regions'     , type=str, default='auto', nargs='+', help='Regions around candidate sites.' )
-   
+
     args = parser.parse_args()
     
     
@@ -50,19 +52,12 @@ def main():
     dir_ref_fa = args.ref
     blast_db   = args.blastdb
     quick_mode = args.quick_mode
-    if args.regions == 'auto':
-        regions = [500, 1000, 2000, 3000]
-    else:
-        regions = list(map(int, args.regions))
-    common_chr = pd.Series(['chr']*23).str[:] + pd.Series(range(23)).astype(str).str[:]
-    common_chr = pd.concat([common_chr, pd.Series(['chrX','chrY'])]).to_numpy()
     
     # parameters for alignment
     half_width = 100
     pct_params = 1.0
     frag_len= half_width*2
-    location_len = regions[-1]
-    dir_df_alignment = os.path.join(dir_output, f'df_alignment_{sgRNA_name}_{location_len}.csv')
+    dir_df_candidate = os.path.join(dir_output, f'df_candidate_{sgRNA_name}.csv')
     
     
     sgRNA_seq = sgRNA_seq.upper()
@@ -72,13 +67,13 @@ def main():
     dir_sgRNA_bed   = os.path.join(dir_output, f'{sgRNA_name}_PAM.bed')
     
     
-    possible_sgRNA_PAM = list(product([sgRNA_seq],possible_seq(PAM)))
+    possible_sgRNA_PAM = list(product([sgRNA_seq],xseq.possible_seq(PAM)))
     possible_sgRNA_PAM = [''.join(combination) for combination in possible_sgRNA_PAM]
     n_seq = len(possible_sgRNA_PAM)
     
     ID = pd.Series(['seq']*n_seq) + pd.Series(range(1,n_seq+1)).astype(str)
     df_sgRNA_PAM = pd.DataFrame({'ID':ID,'sequence':possible_sgRNA_PAM})
-    write_fasta(df_sgRNA_PAM, dir_sgRNA_fasta)
+    xseq.write_fasta(df_sgRNA_PAM, dir_sgRNA_fasta)
     
     
     
@@ -95,7 +90,7 @@ def main():
                                                 gapopen=4, gapextend=2, reward=2, word_size=5, dust='no', soft_masking=False)
         else:
             blastx_cline = NcbiblastnCommandline(query=dir_sgRNA_fasta, task='blastn-short',out=dir_sgRNA_blast,
-                                                db=blast_db, evalue=100000,outfmt=6, num_threads=n_threads,
+                                                db=blast_db, evalue=10000,outfmt=6, num_threads=n_threads,
                                                 gapopen=4, gapextend=2, reward=2, word_size=4, dust='no', soft_masking=False)   
         print(f'BLAST for candidate off-target sites of {sgRNA_name}.')
         blastx_cline()
@@ -129,77 +124,28 @@ def main():
     blast_regions = blast_regions.reindex(columns = ['chr', 'st', 'ed' , 'query acc.', '% identity', 'alignment length', 'mismatches',
         'gap opens', 'q. start', 'q. end', 'evalue', 'bit score', 'reverse', 'location'] )
     
-    # 输出 bed 用于后续 coverage 计算
+    # 输出 bed 用于后续 alignment score 计算
     blast_regions_bed = blast_regions[['chr','st','ed']]
-    writebed(blast_regions_bed, dir_sgRNA_bed)
+    xseq.write_bed(blast_regions_bed, dir_sgRNA_bed)
     # 对 bed 进行排序但不合并
     a = pybedtools.BedTool(dir_sgRNA_bed)
     a.sort(g=dir_chrom_sizes).saveas( dir_sgRNA_bed )
     print(f'Output {sgRNA_name}_PAM.bed')
     
     
-    ############################
-    # Output candidate regions #
-    ############################
-    
-    blast_regions_bed = X_readbed(dir_sgRNA_bed)
-    blast_regions_bed = blast_regions_bed[blast_regions_bed['chr'].isin(common_chr)]
-    blast_regions_bed['midpoint'] = ((blast_regions_bed['st'] + blast_regions_bed['ed'])/2).astype(int)
-    blast_regions_bed = blast_regions_bed.drop_duplicates(subset=['chr','midpoint']).copy()
-    for a_region in regions:
-        candidate_region_left = blast_regions_bed.copy()
-        candidate_region_left['ed'] = candidate_region_left['midpoint']
-        candidate_region_left['st'] = candidate_region_left['midpoint']-a_region
-        candidate_region_left.loc[candidate_region_left['st']<0,'st'] = 0
-        # 储存并排序
-        left_region =os.path.join(dir_output, f'{sgRNA_name}_candidate_left_{a_region}.bed')
-        writebed(candidate_region_left.iloc[:,:3], left_region)
-        a = pybedtools.BedTool(left_region)
-        a.sort(g=dir_chrom_sizes).saveas( left_region )  
-        
-        candidate_region_right = blast_regions_bed.copy()
-        candidate_region_right['st'] = candidate_region_right['midpoint']
-        candidate_region_right['ed'] = candidate_region_right['midpoint']+a_region
-        # 储存并排序
-        right_region = os.path.join(dir_output, f'{sgRNA_name}_candidate_right_{a_region}.bed')
-        writebed(candidate_region_right.iloc[:,:3], right_region)
-        a = pybedtools.BedTool(right_region)
-        a.sort(g=dir_chrom_sizes).saveas( right_region ) 
-    
-    # background noise
-    for i in range(1,4):
-        candidate_region_left = blast_regions_bed.copy()
-        candidate_region_left['ed'] = candidate_region_left['midpoint']-5000*i
-        candidate_region_left['st'] = candidate_region_left['midpoint']-5000*(i+1)
-        candidate_region_left.loc[candidate_region_left['st']<0,'st'] = 0
-        candidate_region_left.loc[candidate_region_left['ed']<5000,'ed'] = 5000
-        # 储存并排序
-        left_region =os.path.join(dir_output, f'{sgRNA_name}_candidate_left_bkg{i}.bed')
-        writebed(candidate_region_left.iloc[:,:3], left_region)
-        a = pybedtools.BedTool(left_region)
-        a.sort(g=dir_chrom_sizes).saveas( left_region )  
-        
-        candidate_region_right = blast_regions_bed.copy()
-        candidate_region_right['st'] = candidate_region_right['midpoint']+5000*i
-        candidate_region_right['ed'] = candidate_region_right['midpoint']+5000*(i+1)
-        # 储存并排序
-        right_region = os.path.join(dir_output, f'{sgRNA_name}_candidate_right_bkg{i}.bed')
-        writebed(candidate_region_right.iloc[:,:3], right_region)
-        a = pybedtools.BedTool(right_region)
-        a.sort(g=dir_chrom_sizes).saveas( right_region )     
-    
-    print(f'Output candidate regions of {sgRNA_name}.')     
-    
     ###################
     # alignment score #
     ###################
-    if os.path.isfile(dir_df_alignment):
-        print(f'{dir_df_alignment} exists, skipped.')
+    if os.path.isfile(dir_df_candidate):
+        print(f'{dir_df_candidate} exists, skipped.')
     else:
         #########
         # 读取 blast bed
         #########
-        bed_short = X_readbed(dir_sgRNA_bed)
+        common_chr = pd.Series(['chr']*23).str[:] + pd.Series(range(23)).astype(str).str[:]
+        common_chr = pd.concat([common_chr, pd.Series(['chrX','chrY'])]).to_numpy()
+        
+        bed_short = xseq.X_readbed(dir_sgRNA_bed)
         bed_short = bed_short[bed_short['chr'].isin(common_chr)].copy()
         bed_short['midpoint'] = ((bed_short['st'] + bed_short['ed'])/2).astype(int)
         bed_short['st'] = bed_short['midpoint'] - half_width 
@@ -212,7 +158,7 @@ def main():
         #########
         
         temp_bed = os.path.join(dir_output, 'temp.bed')
-        writebed(bed_short.iloc[:,:3], temp_bed)
+        xseq.write_bed(bed_short.iloc[:,:3], temp_bed)
         a = pybedtools.BedTool(temp_bed)
         fasta = pybedtools.example_filename(dir_ref_fa)
         a = a.sequence(fi=fasta)
@@ -239,7 +185,7 @@ def main():
         mismatch_score = 0.01
         # 添加 PAM
         sgRNA_PAM_fw = sgRNA_seq + PAM
-        sgRNA_PAM_rv = reverse_complement(sgRNA_PAM_fw)
+        sgRNA_PAM_rv = xseq.reverse_complement(sgRNA_PAM_fw)
         
         list_args_fw=[]
         list_args_rv=[]
@@ -249,38 +195,44 @@ def main():
             list_args_rv.append( [a_key, sgRNA_PAM_rv, seq, frag_len, DNA_matrix, mismatch_score] )
         st = time.time()
         with mp.Pool(n_threads) as p:
-            list_align_forward = p.starmap(sgRNA_alignment, list_args_fw)
+            list_align_forward = p.starmap(xseq.sgRNA_alignment, list_args_fw)
         ed = time.time()
         print('align_forward:{:.2f}'.format(ed-st))
         st = time.time()
         with mp.Pool(n_threads) as p:
-            list_align_reverse = p.starmap(sgRNA_alignment, list_args_rv)
+            list_align_reverse = p.starmap(xseq.sgRNA_alignment, list_args_rv)
         ed = time.time()
         print('align_reverse:{:.2f}'.format(ed-st))
         #
         df_align_forward = pd.DataFrame(list_align_forward, columns= ['fw_score','fw_pct','fw_target','fw_location','fw_deletion','fw_insertion','fw_mismatch'])
         df_align_reverse = pd.DataFrame(list_align_reverse, columns= ['rv_score','rv_pct','rv_target','rv_location','rv_deletion','rv_insertion','rv_mismatch'])
-        df_align_reverse['rv_target'] = df_align_reverse['rv_target'].apply(reverse_complement)
-        df_alignment = pd.concat([df_align_forward,df_align_reverse],axis=1)
-        df_alignment['location'] = fasta.keys()
-        df_alignment['alignment_score'] = df_alignment[['fw_score','rv_score']].max(axis=1)
-        df_alignment['fw_score_2'] = df_alignment['fw_score']*(pct_params-df_alignment['fw_pct'].abs())
-        df_alignment['rv_score_2'] = df_alignment['rv_score']*(pct_params-df_alignment['rv_pct'].abs())
-        df_alignment['best_seq_score'] = df_alignment[['fw_score_2', 'rv_score_2']].max(axis=1)
-        df_alignment['best_strand'] = df_alignment[['fw_score_2', 'rv_score_2']].idxmax(axis='columns').replace({'fw_score_2':'+', 'rv_score_2':'-'})
-        df_alignment.loc[df_alignment['fw_score_2']==df_alignment['rv_score_2'],'best_strand']='equal_score'
-        
+        df_align_reverse['rv_target'] = df_align_reverse['rv_target'].apply(xseq.reverse_complement)
+        df_candidate = pd.concat([df_align_forward,df_align_reverse],axis=1)
+        df_candidate['location'] = fasta.keys()
+        df_candidate['alignment_score'] = df_candidate[['fw_score','rv_score']].max(axis=1)
+        #df_candidate['fw_score_2'] = df_candidate['fw_score']*(pct_params-df_candidate['fw_pct'].abs())
+        #df_candidate['rv_score_2'] = df_candidate['rv_score']*(pct_params-df_candidate['rv_pct'].abs())
+        #df_candidate['best_seq_score'] = df_candidate[['fw_score_2', 'rv_score_2']].max(axis=1)
+        #df_candidate['best_strand'] = df_candidate[['fw_score_2', 'rv_score_2']].idxmax(axis='columns').replace({'fw_score_2':'+', 'rv_score_2':'-'})
+        #df_candidate.loc[df_candidate['fw_score_2']==df_candidate['rv_score_2'],'best_strand']='equal_score'
+        df_candidate['best_seq_score'] = df_candidate[['fw_score', 'rv_score']].max(axis=1)
+        df_candidate['best_strand'] = df_candidate[['fw_score', 'rv_score']].idxmax(axis='columns').replace({'fw_score':'+', 'rv_score':'-'})
+        df_candidate.loc[df_candidate['fw_score']==df_candidate['rv_score'],'best_strand']='equal_score'
+                
         # GG check
+        # 2023.12.05 增加 cleavage_site 推测
         list_best_target = []
         list_best_location = []
+        list_cleavage_site = []
         list_delete = []
         list_insert = []
         list_mismat = []
         list_GG = []
-        for a_row in df_alignment.iterrows():
+        for a_row in df_candidate.iterrows():
             if a_row[1]['best_strand']=='+':
                 list_best_target.append(a_row[1]['fw_target'])
                 list_best_location.append(a_row[1]['fw_location'])
+                list_cleavage_site.append(int(a_row[1]['fw_location'].split('-')[1]) - 6)
                 list_delete.append(a_row[1]['fw_deletion'])
                 list_insert.append(a_row[1]['fw_insertion'])
                 list_mismat.append(a_row[1]['fw_mismatch'])
@@ -291,6 +243,7 @@ def main():
             elif a_row[1]['best_strand']=='-':
                 list_best_target.append(a_row[1]['rv_target'])
                 list_best_location.append(a_row[1]['rv_location'])
+                list_cleavage_site.append(int(a_row[1]['rv_location'].split('-')[0].split(':')[1]) + 5)
                 list_delete.append(a_row[1]['rv_deletion'])
                 list_insert.append(a_row[1]['rv_insertion'])
                 list_mismat.append(a_row[1]['rv_mismatch'])
@@ -302,6 +255,7 @@ def main():
                 if a_row[1]['fw_target'][-2:]=='GG':
                     list_best_target.append(a_row[1]['fw_target'])
                     list_best_location.append(a_row[1]['fw_location'])
+                    list_cleavage_site.append(int(a_row[1]['fw_location'].split('-')[1]) - 6)
                     list_delete.append(a_row[1]['fw_deletion'])
                     list_insert.append(a_row[1]['fw_insertion'])
                     list_mismat.append(a_row[1]['fw_mismatch'])
@@ -310,6 +264,7 @@ def main():
                 elif a_row[1]['rv_target'][-2:]=='GG':
                     list_best_target.append(a_row[1]['rv_target'])
                     list_best_location.append(a_row[1]['rv_location'])
+                    list_cleavage_site.append(int(a_row[1]['rv_location'].split('-')[0].split(':')[1]) + 5)
                     list_delete.append(a_row[1]['rv_deletion'])
                     list_insert.append(a_row[1]['rv_insertion'])
                     list_mismat.append(a_row[1]['rv_mismatch'])
@@ -317,25 +272,28 @@ def main():
                 else:
                     list_best_target.append(a_row[1]['fw_target'])
                     list_best_location.append(a_row[1]['fw_location'])
+                    list_cleavage_site.append(int(a_row[1]['fw_location'].split('-')[1]) - 6)
                     list_delete.append(a_row[1]['fw_deletion'])
                     list_insert.append(a_row[1]['fw_insertion'])
                     list_mismat.append(a_row[1]['fw_mismatch'])                    
                     list_GG.append('NO_same_score')
-        # 记入 df_alignment
-        df_alignment['deletion'] = list_delete
-        df_alignment['insertion'] = list_insert
-        df_alignment['mismatch'] = list_mismat
-        df_alignment['GG'] = list_GG
-        df_alignment['best_target'] = list_best_target
-        df_alignment['target_location'] = list_best_location
+        # 记入 df_candidate
+        df_candidate['deletion'] = list_delete
+        df_candidate['insertion'] = list_insert
+        df_candidate['mismatch'] = list_mismat
+        df_candidate['GG'] = list_GG
+        df_candidate['best_target'] = list_best_target
+        df_candidate['target_location'] = list_best_location
+        df_candidate['cleavage_site'] = list_cleavage_site
         
-        # 和 df_pivot 一致，左右各 location_len
-        bed_short['st'] = bed_short['midpoint'] - location_len 
-        bed_short['ed'] = bed_short['midpoint'] + location_len
-        bed_short.loc[bed_short['st']<0,'st']=0
-        df_alignment.index = igvfmt(bed_short)
-        df_alignment.to_csv(dir_df_alignment)
-        print(f'Output df_alignment_{sgRNA_name}_{location_len}.csv')
+        # 2.0 更新一下格式
+        df_candidate = df_candidate.drop_duplicates(subset=['target_location']).reset_index(drop=True)
+        df_candidate = pd.concat([xseq.bedfmt(df_candidate['target_location']), df_candidate],axis=1)
+        # df_candidate['midpoint'] = ((df_candidate['ed'] + df_candidate['st'])/2).astype(int)
+        df_candidate = xseq.add_ID(df_candidate, midpoint='cleavage_site')
+   
+        df_candidate.to_csv(dir_df_candidate)
+        print(f'Output df_candidate_{sgRNA_name}.csv')
         os.remove(temp_bed)
     
     return 'Done!'

@@ -129,5 +129,6 @@ Besides, add "--blacklist none" or "--blacklist Your_Blacklist" when running off
 
 Note3
 --------------
-Instead of setting a fixed threshold for track score or FDR, it is strongly recommended to observe the "fw.scaled.bw" and "rv.scaled.bw" using IGV to visualize top targets from the Track-seq result.
+The FDR in the Track-seq result is not rigorous to the real off-target probability.
+It is strongly recommended to observe the "fw.scaled.bw" and "rv.scaled.bw" using IGV to check each target location from the Track-seq result.
 
