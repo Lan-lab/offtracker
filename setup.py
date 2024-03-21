@@ -9,7 +9,7 @@ from setuptools import find_packages, setup, Command
 
 #
 NAME = 'offtracker'
-DESCRIPTION = 'Track-seq data analysis'
+DESCRIPTION = 'Tracking-seq data analysis'
 AUTHOR = 'Runda Xu'
 EMAIL = 'runda.xu@foxmail.com'
 URL = 'https://github.com/Lan-lab/offtracker'

@@ -1,7 +1,7 @@
 OFF-TRACKER
 =======================
 
-OFF-TRACKER is an end to end pipeline of Track-seq data analysis for detecting off-target sites of any genome editing tools that generate double-strand breaks (DSBs) or single-strand breaks (SSBs).
+OFF-TRACKER is an end to end pipeline of Tracking-seq data analysis for detecting off-target sites of any genome editing tools that generate double-strand breaks (DSBs) or single-strand breaks (SSBs).
 
 System requirements
 -----
@@ -58,7 +58,7 @@ offtracker_candidates.py -t 8 -g hg38 \
 
 ```
 
-Strand-specific mapping of Track-seq data 
+Strand-specific mapping of Tracking-seq data 
 -----
 
 ```bash
@@ -129,6 +129,6 @@ Besides, add "--blacklist none" or "--blacklist Your_Blacklist" when running off
 
 Note3
 --------------
-The FDR in the Track-seq result is not rigorous to the real off-target probability.
-It is strongly recommended to observe the "fw.scaled.bw" and "rv.scaled.bw" using IGV to check each target location from the Track-seq result.
+The FDR in the Tracking-seq result is not rigorous to the real off-target probability.
+It is strongly recommended to observe the "fw.scaled.bw" and "rv.scaled.bw" using IGV to check each target location from the Tracking-seq result.
 
