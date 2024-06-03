@@ -312,7 +312,7 @@ def target_signal_chunk(df_bdg_chr, df_alignment_chr, flank_max=100000, smooth_t
 
 # 2024.01.22. 额外写一个 signal length 算法，增加基于 pos_pct 而非 smooth 后的 overall_signal 的 length，叫 singal_length
 def signal_length(df_bdg_chr, chrom, cleavage_site, end='end',start='start',value='residual', 
-                  flank_max=100000, binsize=100, pct_threshold=0.6):
+                  flank_max=100000, binsize=100):
     # 输入数据必须是同一条染色体内的
     # Left
     df_bdg_chr_L = df_bdg_chr[ (df_bdg_chr[end] >= cleavage_site-flank_max) & (df_bdg_chr[end]<=cleavage_site) ].copy()
@@ -334,5 +334,6 @@ def signal_length(df_bdg_chr, chrom, cleavage_site, end='end',start='start',valu
     list_signal_pct_L = []
     list_pct_score_L = []
     list_signal_residual_L = []
+    
 
     return list_return

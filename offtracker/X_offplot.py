@@ -1,12 +1,22 @@
+
+import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-import pandas as pd
+from matplotlib import rcParams
+# 和用 plt.rcParams or matplotlib.rcParams 是一样的
+dict_rc = {
+    'pdf.fonttype': 42,
+    'font.family': ['Arial']
+}
+rcParams.update(dict_rc)
 
-def offtable(offtargets, target_guide, 
+# 2024.06.03. offtable 添加 threshold 分界线，默认为 None，常用的是 2
+def offtable(offtargets, target_guide,  length_pam = 3, 
                          col_seq='best_target', col_score='track_score', col_mismatch='mismatch', col_loc='target_location',
                          title=None, font='Arial', font_size=9, 
-                         box_size_x=15, box_size_y=20, box_gap=1,
-                         x_offset=15, y_offset=35, dpi=100, savefig=None):
+                         box_size_x=15, box_size_y=20, box_gap=1, threshold=None,
+                         x_offset=15, y_offset=35, dpi=300, savefig=None):
     # Facecolor
     color_dict = {
         'A': 'lightgreen',
@@ -20,6 +30,8 @@ def offtable(offtargets, target_guide,
 
     # If offtargets is a DataFrame, convert to list of dictionaries
     if isinstance(offtargets, pd.DataFrame):
+        if threshold is not None:
+            n_positive = sum(offtargets[col_score]>=threshold)
         offtargets = offtargets.to_dict(orient='records')
 
     # Configuration
@@ -31,7 +43,7 @@ def offtable(offtargets, target_guide,
     # box_gap = 1 # 两行之间的间隔
     # x_offset = 15
     # y_offset = 35
-    # dpi=100
+    # dpi=300
     # col_seq='best_target'
     # col_score='track_score'
     # col_mismatch='mismatch'
@@ -99,10 +111,17 @@ def offtable(offtargets, target_guide,
         ax.text(x_offset + (len(target_guide) + 4) * box_size_x, y + box_size_y / 2, seq[col_loc], ha='left', va='center', family=font, fontsize=font_size)
 
     # add a vertical line to indicate the PAM
-    x_line = x_offset + (len(target_guide) - 3) * box_size_x
+    x_line = x_offset + (len(target_guide) - length_pam) * box_size_x
     y_start = y_offset # + box_size_y / 2 
     y_end = y_start + (len(offtargets)+1) * (box_size_y + box_gap)
     ax.vlines(x=x_line, ymin=y_start, ymax=y_end, color='indianred', linestyle='--')
+
+    # 2024.06.03. add a horizontal line to indicate the threshold
+    if threshold is not None:
+        thresh_x_start = x_offset
+        thresh_x_end = x_offset + len(target_guide) * box_size_x
+        thresh_y = y_offset + (n_positive+1) * (box_size_y + box_gap) - box_gap*0.5
+        ax.hlines(y=thresh_y, xmin=thresh_x_start, xmax=thresh_x_end, color='orange', linestyle='--')
 
     # Styling and save
     ax.set_xlim(0, width*1.1) # location 的文字太长了，所以要加长一点
@@ -117,7 +136,404 @@ def offtable(offtargets, target_guide,
     plt.show()
     return ax
 
+# summary_method: mean (default) or average, max, min, stdev, dev, coverage, cov or sum.
+# number_of_bins: 700 (default) or any integer above 1
+# 设置 bin_size 可以用来自动调整 number_of_bins，但是如果 **properties 里有 number_of_bins，就会被覆盖
+def igv_tracking(location, file_fw, file_rv, track_name='', track_name_loc='left', 
+                 fig=None, track_position = 0, track_gap = 0.2, single_height=1, bin_size=None,
+                fig_scale = 0.5, aspect_ratio = 5, ax_gap = 0.02, show_title=True, spine_width=0.5,
+                track_color='red', ex_length = 10000, set_ymax_fw = None, set_ymin_rv = None,
+                min_ymax = None,
+                savefig=None, savedpi=200, **properties):
+    # only for plotting tracking-seq bw files
+    import pygenometracks.tracks as pygtk
+    # 一般连画时，后者都会输入 track_position
+    if track_position !=0 :
+        show_title = False
+
+    if fig is None:
+        fig = plt.figure(figsize=(fig_scale, fig_scale))
+    
+    track_height=2*single_height+track_gap*2+ax_gap
+    track_position = track_position - track_height
+    fw_ax = fig.add_axes([0, track_position + track_gap + single_height + ax_gap, aspect_ratio, single_height])
+    rv_ax = fig.add_axes([0, track_position + track_gap , aspect_ratio, single_height])
+
+    location = location.replace(',','')
+    chrom = location.split(':')[0]
+    start_region,end_region = location.split(':')[1].split('-')
+    start_region = int(start_region) - ex_length
+    end_region = int(end_region) + ex_length
+
+    track_config_fw  = dict(file=file_fw)
+    tk_fw = pygtk.BigWigTrack(track_config_fw)
+    tk_fw.properties['color'] = track_color
+    tk_fw.properties['negative_color'] = track_color
+    if bin_size is not None:
+        n_bins = (end_region-start_region)//bin_size
+        tk_fw.properties['number_of_bins'] = n_bins
+    # for properties in kwargs:
+    for key, value in properties.items():
+        tk_fw.properties[key] = value
+    tk_fw.plot(fw_ax,chrom,start_region,end_region,)
+    ymax_fw = fw_ax.get_ylim()[1]
+    print('ymax_fw',ymax_fw)
+    if set_ymax_fw:
+        fw_ax.set_ylim(0,set_ymax_fw)
+        real_ymax_fw = set_ymax_fw
+    else:
+        if min_ymax is not None:
+            ymax_fw = max(ymax_fw,min_ymax)
+        fw_ax.set_ylim(0,ymax_fw)
+        real_ymax_fw = ymax_fw
+    fw_ax.set_xlim(start_region,end_region)
+    # hide the spine and ticks 
+    for spine in fw_ax.spines.values():
+        spine.set_visible(False)
+    fw_ax.spines['bottom'].set_visible(True)
+    fw_ax.spines['bottom'].set_linewidth(fig_scale*spine_width)
+    #fw_ax.spines['bottom'].set_color(track_color)
+    fw_ax.tick_params(bottom=False, labelbottom=False, left=False, labelleft=False)
+
+    track_config_rv  = dict(file=file_rv)
+    tk_rv = pygtk.BigWigTrack(track_config_rv)
+    tk_rv.properties['color'] = track_color
+    tk_rv.properties['negative_color'] = track_color
+    if bin_size is not None:
+        n_bins = (end_region-start_region)//bin_size
+        tk_rv.properties['number_of_bins'] = n_bins
+    # for properties in kwargs:
+    for key, value in properties.items():
+        tk_rv.properties[key] = value
+    tk_rv.plot(rv_ax,chrom,start_region,end_region,)
+    ymin_rv = rv_ax.get_ylim()[0]
+    print('ymin_rv',ymin_rv)
+    if set_ymin_rv:
+        rv_ax.set_ylim(set_ymin_rv,0)
+        real_ymin_rv = set_ymin_rv
+    else:
+        if min_ymax is not None:
+            ymin_rv = min(ymin_rv,-min_ymax)
+        rv_ax.set_ylim(ymin_rv,0)
+        real_ymin_rv = ymin_rv
+    rv_ax.set_xlim(start_region,end_region) # 实际上没必要，因为 sharex='col'
+    # hide the spine and ticks 
+    for spine in rv_ax.spines.values():
+        spine.set_visible(False)
+    rv_ax.spines['top'].set_visible(True)
+    rv_ax.spines['top'].set_linewidth(fig_scale*spine_width)
+    #rv_ax.spines['top'].set_color(track_color)
+    rv_ax.tick_params(bottom=False, labelbottom=False, left=False, labelleft=False)
+
+    # add y range on the left top
+    # 如果 properties 里有 summary_method = 'sum'， 则除以 bin size
+    showed_ymax = real_ymax_fw
+    showed_ymin = real_ymin_rv
+    if 'summary_method' in properties:
+        if properties['summary_method'] == 'sum':
+            showed_ymax = real_ymax_fw/bin_size
+            showed_ymin = real_ymin_rv/bin_size
+    fw_ax.text(start_region, real_ymax_fw, f'{showed_ymin:.1f}-{showed_ymax:.1f}', ha='left', va='top', fontsize=fig_scale*15)
+
+    # add track name to the left or right
+    x_range = end_region - start_region
+    x_gap = x_range*0.02
+    if track_name_loc == 'left':
+        fw_ax.text(start_region-x_gap, 0, track_name, ha='right', va='center', fontsize=fig_scale*20)
+    else:
+        fw_ax.text(end_region+x_gap, 0, track_name, ha='left', va='center', fontsize=fig_scale*20)
+
+    print(f'{chrom}:{start_region}-{end_region}')
+    if show_title:
+        region_length = round((end_region - start_region)/1000,1)
+        fw_ax.set_title(f'{chrom}:{start_region}-{end_region}\n({region_length:g} kb)',loc='center',fontsize=fig_scale*20)
+
+    if savefig is not None:
+        plt.savefig(savefig, bbox_inches='tight', dpi=savedpi)
+
+    return fig, track_position
 
 
+def igv_single(location, file, fig=None, track_name='', track_name_loc='left',
+                track_position = 0, track_gap = 0.2, bin_size=None,
+                fig_scale = 0.5, aspect_ratio = 5, show_title=True, spine_width=0.5,
+                track_color='red', ex_length = 10000, set_ymax_single = None, min_ymax=None,
+                savefig=None, savedpi=200, **properties):
+    # for plotting a general bw file
+    import pygenometracks.tracks as pygtk
+
+    # 一般连画时，后者都会输入 track_position
+    if track_position !=0 :
+        show_title = False
+
+    if fig is None:
+        fig = plt.figure(figsize=(fig_scale, fig_scale))
+    
+    track_height=1+track_gap*2
+    track_position = track_position - track_height
+    single_ax = fig.add_axes([0, track_position + track_gap, aspect_ratio, 1])
+
+    location = location.replace(',','')
+    chrom = location.split(':')[0]
+    start_region,end_region = location.split(':')[1].split('-')
+    start_region = int(start_region) - ex_length
+    end_region = int(end_region) + ex_length
+
+    track_config_single  = dict(file=file)
+    tk_single = pygtk.BigWigTrack(track_config_single)
+    tk_single.properties['color'] = track_color
+    tk_single.properties['negative_color'] = track_color
+    if bin_size is not None:
+        n_bins = (end_region-start_region)//bin_size
+        tk_single.properties['number_of_bins'] = n_bins
+    # for properties in kwargs:
+    for key, value in properties.items():
+        tk_single.properties[key] = value
+    tk_single.plot(single_ax,chrom,start_region,end_region,)
+    ymax_single = single_ax.get_ylim()[1]
+    print('ymax_single',ymax_single)
+    if set_ymax_single:
+        single_ax.set_ylim(0,set_ymax_single)
+        ylim_middle = set_ymax_single/2
+        real_ymax = set_ymax_single
+    else:
+        if min_ymax is not None:
+            ymax_single = max(ymax_single,min_ymax)
+        single_ax.set_ylim(0,ymax_single)
+        ylim_middle = ymax_single/2
+        real_ymax = ymax_single
+    single_ax.set_xlim(start_region,end_region)
+    # hide the spine and ticks 
+    for spine in single_ax.spines.values():
+        spine.set_visible(False)
+    single_ax.spines['bottom'].set_visible(True)
+    single_ax.spines['bottom'].set_linewidth(fig_scale*spine_width)
+    #single_ax.spines['bottom'].set_color(track_color)
+    single_ax.tick_params(bottom=False, labelbottom=False, left=False, labelleft=False)
+
+    # add y range on the left top
+    # 如果 properties 里有 summary_method = 'sum'， 则除以 bin size
+    showed_ymax = real_ymax
+    if 'summary_method' in properties:
+        if properties['summary_method'] == 'sum':
+            showed_ymax = real_ymax/bin_size
+    single_ax.text(start_region, real_ymax, f'0-{showed_ymax:.0f}', ha='left', va='top', fontsize=fig_scale*15)
+
+    # add track name to the left or right
+    x_range = end_region - start_region
+    x_gap = x_range*0.02
+    if track_name_loc == 'left':
+        single_ax.text(start_region-x_gap, ylim_middle, track_name, ha='right', va='center', fontsize=fig_scale*20)
+    else:
+        single_ax.text(end_region+x_gap, ylim_middle, track_name, ha='left', va='center', fontsize=fig_scale*20)
+
+    print(f'{chrom}:{start_region}-{end_region}')
+    if show_title:
+        region_length = round((end_region - start_region)/1000,1)
+        single_ax.set_title(f'{chrom}:{start_region}-{end_region}\n({region_length:g} kb)',loc='center',fontsize=fig_scale*20)
+
+    if savefig is not None:
+        plt.savefig(savefig, bbox_inches='tight', dpi=savedpi)
+
+    return fig, track_position
+
+
+from statsmodels.nonparametric.smoothers_lowess import lowess
+def signal_length(df_bdg_chr, chrom, cleavage_site, end='end',start='start',value='residual', 
+                  flank_max=100000, bin_size=100, window_size=3000,signal_threshold = 0.3, show_plot=False, savefig=None, save_dpi=100):
+    df_bdg_chr = df_bdg_chr[df_bdg_chr['chr']==chrom]
+    ## left
+    # 取 cleavage_site 附近的数据
+    df_bdg_chr_L = df_bdg_chr[ (df_bdg_chr[end] >= cleavage_site-flank_max) & (df_bdg_chr[end]<=cleavage_site) ].copy()
+    y_L = df_bdg_chr_L[value]
+    n_bins_L = len(y_L)
+    x_L = np.arange(n_bins_L)
+    bins=n_bins_L ## 和 right 公用
+    # 用 window_size 做临近
+    frac = window_size/(bins*bin_size)
+    lowess_smoothed_L = lowess(y_L[-bins:], x_L[-bins:], frac=frac)
+    lowess_smoothed_L = lowess(lowess_smoothed_L[:, 1], lowess_smoothed_L[:, 0], frac=frac)
+    # 得到最后一个 <signal_threshold 的 index
+    bool_L = lowess_smoothed_L[:,1]<signal_threshold
+    index_L = np.where(bool_L)[0][-1]
+    if index_L == (bins-1):
+        # 可能是单边信号，数值反向
+        lowess_smoothed_L_reverse = -lowess_smoothed_L[:,1]
+        bool_L = lowess_smoothed_L_reverse<signal_threshold
+        index_L = np.where(bool_L)[0][-1]
+    # 考虑到 smooth，所以长度 + 1
+    index_L = index_L - 1
+    signal_L = lowess_smoothed_L[index_L+1:,1]
+    length_L = (len(signal_L)*bin_size)/1000
+    max_signal_L = y_L.max()
+    y_max_L = max_signal_L*1.2
+    left_region = chrom + ':' + df_bdg_chr_L.iloc[0,1].astype(str) + '-' + df_bdg_chr_L.iloc[-1,2].astype(str)
+
+    ## right
+    # 取 cleavage_site 附近的数据
+    df_bdg_chr_R = df_bdg_chr[ (df_bdg_chr[start] <= cleavage_site+flank_max) & (df_bdg_chr[start]>=cleavage_site) ].copy()
+    y_R = df_bdg_chr_R[value]
+    n_bins_R = len(y_R)
+    x_R = np.arange(n_bins_R)
+    # 用 window_size 做临近
+    frac = window_size/(bins*bin_size)
+    lowess_smoothed_R = lowess(y_R[:bins], x_R[:bins], frac=frac)
+    lowess_smoothed_R = lowess(lowess_smoothed_R[:, 1], lowess_smoothed_R[:, 0], frac=frac)
+    # 得到第一个 >-signal_threshold 的 index
+    bool_R = lowess_smoothed_R[:,1]>-signal_threshold
+    index_R = np.where(bool_R)[0][0]
+    if index_R == 0:
+        # 可能是单边信号，数值反向
+        lowess_smoothed_R_reverse = -lowess_smoothed_R[:,1]
+        bool_R = lowess_smoothed_R_reverse>-signal_threshold
+        index_R = np.where(bool_R)[0][0]
+    # 考虑到 smooth，所以长度 + 1
+    index_R = index_R + 1
+    signal_R = lowess_smoothed_R[:index_R,1]
+    length_R = (len(signal_R)*bin_size)/1000
+    min_signal_R = y_R.min()
+    y_mim_R = min_signal_R*1.2
+    right_region = chrom + ':' + df_bdg_chr_R.iloc[0,1].astype(str) + '-' + df_bdg_chr_R.iloc[-1,2].astype(str)
+
+    if show_plot:
+        fig = plt.figure(figsize=(10, 3))
+        ax1 = fig.add_axes([0.0, 0.1, 0.5, 0.8])
+        ax2 = fig.add_axes([0.5, 0.1, 0.5, 0.8])
+
+        # plot left
+        ax1.plot(range(bins), y_L[-bins:], label='Original')
+        ax1.plot(range(bins), lowess_smoothed_L[-bins:, 1], label='LOWESS', color='red')
+        ax1.plot([0,bins],[0,0],label='zero',color='black')
+        ax1.plot([0,bins],[signal_threshold,signal_threshold],label='threshold_left',color='orange')
+        ax1.plot([0,bins],[-signal_threshold,-signal_threshold],label='threshold_right',color='orange')
+        ax1.plot([index_L+1,index_L+1],[y_mim_R,y_max_L],label='length cutoff',color='orange')
+        ax1.set_ylim(y_mim_R,y_max_L)
+        ax1.set_xlim(-1,bins+1)
+        ax1.set_xlabel('distance to cleavage site (kb)')
+        ax1.set_title(left_region)
+
+        # add xticks
+        xtick_gap = 10000/bin_size # 10kb
+        n_xticks = int(np.ceil(bins/xtick_gap))
+        xticks = np.arange(0,n_xticks+1)*xtick_gap
+        xticks_label = np.arange(0,n_xticks+1)*10
+        xticks_label = np.flip(xticks_label)
+        # add length cutoff into xticks
+        # # 不加到xticks，可能会和原来的重合，改用text
+        # xticks = np.append(xticks, index_L+1)
+        # xticks_label = np.append(xticks_label, length_L)
+        ax1.text(index_L-3, 3, f'{length_L:g} kb', ha='right', va='top')
+        ax1.set_xticks(xticks)
+        _ = ax1.set_xticklabels([f'{x:g}' for x in xticks_label])
+        ax1.set_ylabel('signal difference\n(coverage per 10M reads)')
+
+        # plot right
+        ax2.plot(range(bins), y_R[:bins], label='Original')
+        ax2.plot(range(bins), lowess_smoothed_R[:bins, 1], label='LOWESS', color='red')
+        ax2.plot([0,bins],[0,0],label='zero',color='black')
+        ax2.plot([0,bins],[signal_threshold,signal_threshold],label='threshold_left',color='orange')
+        ax2.plot([0,bins],[-signal_threshold,-signal_threshold],label='threshold_right',color='orange')
+        ax2.plot([index_R,index_R],[y_mim_R,y_max_L],label='length cutoff',color='orange')
+        ax2.set_ylim(y_mim_R,y_max_L)
+        ax2.set_xlim(-1,bins+1)
+        ax2.set_xlabel('distance to cleavage site (kb)')
+        ax2.set_title(right_region)
+
+        # add xticks
+        xtick_gap = 10000/bin_size # 10kb
+        n_xticks = int(np.ceil(bins/xtick_gap))
+        xticks = np.arange(0,n_xticks+1)*xtick_gap
+        xticks_label = np.arange(0,n_xticks+1)*10
+        # add length cutoff into xticks
+        # # 不加到xticks，可能会和原来的重合，改用text
+        # xticks = np.append(xticks, index_R)
+        # xticks_label = np.append(xticks_label, length_R)
+        ax2.text(index_R+4, -3, f'{length_R:g} kb', ha='left', va='bottom')
+        ax2.set_xticks(xticks)
+        _ = ax2.set_xticklabels([f'{x:g}' for x in xticks_label])
+        
+        # 左右两个图紧贴
+        ax2.set_yticks([])
+        ax2.set_yticklabels([])
+        ax2.set_ylabel('')
+        if savefig is not None:
+            plt.savefig(savefig, dpi=save_dpi, bbox_inches='tight')
+        #fig.tight_layout()
+        plt.show()
+    return length_L, length_R, lowess_smoothed_L, lowess_smoothed_R, y_L, y_R
+
+
+def tracking_plot(signal_L, signal_R, bin_size=100, bins=None, 
+                  figsize=(10, 3), title='',
+                  show_plot=True, fig=None, ax1=None, ax2=None,
+                  savefig=None, save_dpi=300):
+    if bins is None:
+        bins=len(signal_L)
+    y_max_L = signal_L[-bins:].max()
+    y_mim_R = signal_R[:bins].min()
+
+    if fig is None:
+        fig = plt.figure(figsize=figsize)
+        ax1 = fig.add_axes([0.0, 0.1, 0.5, 0.8])
+        ax2 = fig.add_axes([0.5, 0.1, 0.5, 0.8])
+
+    # plot left
+    ax1.plot(range(bins), signal_L[-bins:], label='Original')
+    #ax1.plot(range(bins), lowess_smoothed_L[-bins:, 1], label='LOWESS', color='red')
+    ax1.plot([0,bins],[0,0],label='zero',color='black')
+    #ax1.plot([0,bins],[signal_threshold,signal_threshold],label='threshold_left',color='orange')
+    #ax1.plot([0,bins],[-signal_threshold,-signal_threshold],label='threshold_right',color='orange')
+    #ax1.plot([index_L+1,index_L+1],[y_mim_R,y_max_L],label='length cutoff',color='orange')
+    ax1.set_ylim(y_mim_R,y_max_L)
+    ax1.set_xlim(-1,bins+1)
+    ax1.set_xlabel('distance to cleavage site (kb)')
+    #ax1.set_title(left_region)
+
+    # add xticks
+    xtick_gap = 10000/bin_size # 10kb
+    n_xticks = int(np.ceil(bins/xtick_gap))
+    xticks = np.arange(0,n_xticks+1)*xtick_gap
+    xticks_label = np.arange(0,n_xticks+1)*10
+    xticks_label = np.flip(xticks_label)
+    ax1.set_xticks(xticks)
+    _ = ax1.set_xticklabels([f'{x:g}' for x in xticks_label])
+    ax1.set_ylabel('signal difference\n(coverage per 10M reads)')
+
+    # plot right
+    ax2.plot(range(bins), signal_R[:bins], label='Original')
+    #ax2.plot(range(bins), lowess_smoothed_R[:bins, 1], label='LOWESS', color='red')
+    ax2.plot([0,bins],[0,0],label='zero',color='black')
+    #ax2.plot([0,bins],[signal_threshold,signal_threshold],label='threshold_left',color='orange')
+    #ax2.plot([0,bins],[-signal_threshold,-signal_threshold],label='threshold_right',color='orange')
+    #ax2.plot([index_R,index_R],[y_mim_R,y_max_L],label='length cutoff',color='orange')
+    ax2.set_ylim(y_mim_R,y_max_L)
+    ax2.set_xlim(-1,bins+1)
+    ax2.set_xlabel('distance to cleavage site (kb)')
+    #ax2.set_title(right_region)
+
+    # add xticks
+    xtick_gap = 10000/bin_size # 10kb
+    n_xticks = int(np.ceil(bins/xtick_gap))
+    xticks = np.arange(0,n_xticks+1)*xtick_gap
+    xticks_label = np.arange(0,n_xticks+1)*10
+    ax2.set_xticks(xticks)
+    _ = ax2.set_xticklabels([f'{x:g}' for x in xticks_label])
+
+    # 左右两个图紧贴
+    ax2.set_yticks([])
+    ax2.set_yticklabels([])
+    ax2.set_ylabel('')
+
+    # 人造 title
+    ax2.text(0, y_max_L*1.1, title, ha='center', va='center')
+
+    if savefig is not None:
+        plt.savefig(savefig, dpi=save_dpi, bbox_inches='tight')
+    
+    #fig.tight_layout()
+    if show_plot:
+        plt.show()
+
+    return fig, ax1, ax2
 
 
