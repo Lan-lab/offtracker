@@ -49,7 +49,10 @@ setup(
     python_requires=REQUIRES_PYTHON,
     packages=find_packages(),
     package_data={'offtracker': ['mapping/*']},
-    scripts = ['scripts/offtracker_config.py','scripts/offtracker_candidates.py','scripts/offtracker_analysis.py'],
+    scripts = ['scripts/offtracker_config.py',
+               'scripts/offtracker_candidates.py',
+               'scripts/offtracker_analysis.py',
+               'scripts/offtracker_plot.py'],
     install_requires=REQUIRED,
     include_package_data=True
 )
