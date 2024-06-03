@@ -26,6 +26,7 @@ def main():
     parser.add_argument('--name'         , type=str, required=True,    help='custom name of the sgRNA' )
     parser.add_argument('--exp'          , type=str, default='all',    nargs='+', help='A substring mark in the name of experimental samples. The default is to use all samples other than control' )
     parser.add_argument('--control'      , type=str, default='none',   nargs='+', help='A substring mark in the name of control samples. The default is no control. "others" for all samples other than --exp.' )
+    parser.add_argument('--fdr'          , type=int, default=0.05,     help='FDR threshold for the final result. Default is 0.05.')
     parser.add_argument('--smooth'       , type=int, default=1,        help='Smooth strength for the signal.')
     parser.add_argument('--window'       , type=int, default=3,        help='Window size for smoothing the signal.')
     parser.add_argument('--binsize'      , type=int, default=100,      help='Window size for smoothing the signal.')
@@ -49,6 +50,7 @@ def main():
     sgRNA_name = args.name
     pattern_exp = args.exp
     pattern_ctr = args.control
+    fdr_thresh = args.fdr
     binsize = args.binsize
     flank_max = args.flank_max
     flank_regions = args.flank_regions
@@ -93,7 +95,7 @@ def main():
         all_sample_files.extend( bdg_files )
     all_sample_files = pd.Series(all_sample_files)
     all_sample_names = pd.Series(all_sample_names)
-
+    print('your string pattern for experimental groups: ', pattern_exp)
     ctr_samples = []
     if pattern_ctr == 'none':
         if pattern_exp == 'all':
@@ -155,8 +157,11 @@ def main():
         df_bdg.columns = ['chr','start','end','residual']
         # 将 df_bdg 按照染色体分组
         sample_groups = df_bdg.groupby('chr')
+        # 2024.06.03. fix a bug that df_bdg has less chr than df_candidate
+        total_chr = df_bdg['chr'].unique()
+        df_candidate_sub_temp = df_candidate_sub[df_candidate_sub['chr'].isin(total_chr)]
         # 将 df_candidate_sub 按照染色体分组
-        candidate_groups = df_candidate_sub.groupby('chr')
+        candidate_groups = df_candidate_sub_temp.groupby('chr')
 
         # 定义一个空的列表，用于存储每个染色体的数据
         chrom_list = []
@@ -234,7 +239,8 @@ def main():
             df_score = pd.concat([df_score, df_exp, df_ctr], axis=1)
         else:
             df_score = pd.concat([df_score, df_exp], axis=1)
-        df_score = df_score.copy()
+        # 2024.06.03. 跑样例数据时，只有一个 chr6, 其他都是 nan, 不删除会导致后续计算出错
+        df_score = df_score.dropna().copy()
         df_score.to_csv(output)
     
     ##########################
@@ -299,12 +305,13 @@ def main():
 
         # 单边信号周围有更高分的，去掉
         # v2.1 后 cols_L, cols_R 要手动
+        # 2024.01.26. 只看 1kb 了，但这个办法还是无法解决约 100-500 bp 以内有两个相似位点的问题
         if pattern_ctr != 'none':
-            cols_L = ['exp_L_1000', 'exp_L_2000']
-            cols_R = ['exp_R_1000', 'exp_R_2000']
+            cols_L = ['exp_L_1000']
+            cols_R = ['exp_R_1000']
         else:
-            cols_L = ['L_1000', 'L_2000'] # df_score.columns[df_score.columns.str.contains('^L_\d+')]
-            cols_R = ['R_1000', 'R_2000'] # df_score.columns[df_score.columns.str.contains('^R_\d+')]
+            cols_L = ['L_1000'] # df_score.columns[df_score.columns.str.contains('^L_\d+')]
+            cols_R = ['R_1000'] # df_score.columns[df_score.columns.str.contains('^R_\d+')]
         seq_score_thresh = np.power(1.25, seq_score_power)
         search_distance = 100000
         candidate_dup = list(df_result[((df_result[cols_R].max(axis=1)<=0)|(df_result[cols_L].max(axis=1)<=0))&(df_result['log2_track_score']>0.8)].index)
@@ -338,8 +345,10 @@ def main():
         df_result['fdr'] = offtracker.fdr(df_result['pv'])
         df_result['rank'] = range(1,len(df_result)+1)
         df_result.to_csv(output)        
-
-        df_output = df_result[df_result['fdr']<=0.05].copy()
+        # 2024.06.03. 以防 fdr<=fdr_thresh 滤掉了 track_score>=2 的位点
+        bool_fdr = df_result['fdr']<=fdr_thresh
+        bool_score = df_result['track_score']>=2
+        df_output = df_result[bool_fdr|bool_score].copy()
         if pattern_ctr != 'none':
             df_output = df_output[['target_location', 'best_strand','best_target','deletion','insertion','mismatch',
                                    'exp_L_length', 'exp_R_length','ctr_L_length','ctr_R_length','L_length','R_length','signal_length',
