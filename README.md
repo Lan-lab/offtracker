@@ -160,6 +160,7 @@ These files can be visualized in genome browser like IGV:
 
 ![signal](https://github.com/Lan-lab/offtracker/blob/main/example_output/signals_example.png?raw=true)
 
+The signal (coverage) for each sample is normalized to 1e7/total_reads. As only reads mapping to chr6 were extracted in the example data, the signal range is higher than that of the whole genome. 
 
 ## Whole genome off-target analysis
 
