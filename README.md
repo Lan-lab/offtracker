@@ -60,13 +60,16 @@ offtracker_candidates.py -t 8 -g hg38 \
 ```bash
 # Generate snakemake config file 
 # --subfolder: If different samples are in seperate folders, set this to 1
-# if -o is not set, the output will be in the same folder as the fastq files
+# Results will be generated in /Your_Path_To_Output, if -o is not set, the output will be in the same folder as the fastq files
 offtracker_config.py -t 8 -g hg38 --blacklist hg38 \
 -r /Your_Path_To_Reference/hg38_genome.fa \
 -i /Your_Path_To_Reference/hg38_genome.chromap.index \
 -f /Your_Path_To_Fastq \
 -o /Your_Path_To_Output \ 
 --subfolder 0 
+
+# Warning: Do not contain "fastq" or "fq" in the folder name, otherwise the program will treat the folder as a fastq file
+# This problem will be fixed in the future version
 
 # Run the snakemake program
 cd /Your_Path_To_Fastq
