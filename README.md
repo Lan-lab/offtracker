@@ -175,7 +175,6 @@ After that, you can visualize the off-target sites with their genomic sequence (
 
 # Citation
 
+If you use Tracking-seq or OFF-TRACKER in your research, please cite the following paper:
 
-
-
-
+Zhu, M., Xu, R., Yuan, J., Wang, J. et al. Tracking-seq reveals the heterogeneity of off-target effects in CRISPR–Cas9-mediated genome editing. Nat Biotechnol (2024). https://doi.org/10.1038/s41587-024-02307-y
