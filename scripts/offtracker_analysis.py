@@ -26,7 +26,8 @@ def main():
     parser.add_argument('--name'         , type=str, required=True,    help='custom name of the sgRNA' )
     parser.add_argument('--exp'          , type=str, default='all',    nargs='+', help='A substring mark in the name of experimental samples. The default is to use all samples other than control' )
     parser.add_argument('--control'      , type=str, default='none',   nargs='+', help='A substring mark in the name of control samples. The default is no control. "others" for all samples other than --exp.' )
-    parser.add_argument('--fdr'          , type=int, default=0.05,     help='FDR threshold for the final result. Default is 0.05.')
+    parser.add_argument('--fdr'          , type=float, default=0.05,     help='FDR threshold for the final result. Default is 0.05.')
+    parser.add_argument('--score'        , type=float, default=1.9,        help='Track score threshold for the final result. Default is 1.9.')
     parser.add_argument('--smooth'       , type=int, default=1,        help='Smooth strength for the signal.')
     parser.add_argument('--window'       , type=int, default=3,        help='Window size for smoothing the signal.')
     parser.add_argument('--binsize'      , type=int, default=100,      help='Window size for smoothing the signal.')
@@ -42,6 +43,7 @@ def main():
     parser.add_argument('--overwrite'    , action='store_true', help='Whether to overwrite existed dataframes.' )
     parser.add_argument('--clean'        , action='store_true', help='Whether to remove temp files')
 
+
     args = parser.parse_args()
 
     print(f'Runing offtracker verision: {offtracker.__version__}')
@@ -51,6 +53,7 @@ def main():
     pattern_exp = args.exp
     pattern_ctr = args.control
     fdr_thresh = args.fdr
+    score_thresh = args.score
     binsize = args.binsize
     flank_max = args.flank_max
     flank_regions = args.flank_regions
@@ -90,11 +93,13 @@ def main():
     all_sample_files = []
     for a_folder in folders:    
         bdg_files = pd.Series(glob.glob(os.path.join( a_folder, '*.add.bdg' ))).sort_values().reset_index(drop=True)
-        sample_names = bdg_files.apply(os.path.basename).str.extract('(.*)\.\d+\.add\.bdg',expand=False)
+        sample_names = bdg_files.apply(os.path.basename).str.extract(r'(.*)\.\d+\.add\.bdg',expand=False)
         all_sample_names.extend( sample_names )
         all_sample_files.extend( bdg_files )
     all_sample_files = pd.Series(all_sample_files)
     all_sample_names = pd.Series(all_sample_names)
+    print('all sample names in the folders:')
+    print(all_sample_names)
     print('your string pattern for experimental groups: ', pattern_exp)
     ctr_samples = []
     if pattern_ctr == 'none':
@@ -204,7 +209,7 @@ def main():
         df_score =  pd.read_csv(output, index_col=0)
     else:
         signal_files = pd.Series(glob.glob( os.path.join(outdir, 'temp', f'*{sgRNA_name}.signal.csv') ))
-        signal_names = signal_files.apply(os.path.basename).str.extract(f'(.*)\.{sgRNA_name}\.signal\.csv',expand=False)
+        signal_names = signal_files.apply(os.path.basename).str.extract(rf'(.*)\.{sgRNA_name}\.signal\.csv',expand=False)
 
         # 读取并合并 samples
         list_df_exp_samples = []
@@ -248,7 +253,7 @@ def main():
     ##########################
     output = f'./temp/df_result_{outname}.csv'
     if (os.path.isfile(output))&(not args.overwrite):
-        print(f'skip {outname} as the result exists')
+        print(f'skip {output} as the result exists')
         df_result =  pd.read_csv(output, index_col=0)
     else:
         if pattern_ctr != 'none':
@@ -282,7 +287,7 @@ def main():
         # 整理表格
         mean_seq_score = round(df_score['best_seq_score'].mean(),3)
         df_score['norm_best_seq_score'] = np.power(df_score['best_seq_score']/mean_seq_score, seq_score_power)        
-        df_score['final_score_1'] = df_score[f'proximal_signal']*df_score['norm_best_seq_score']
+        df_score['final_score_1'] = df_score['proximal_signal']*df_score['norm_best_seq_score']
         df_score['final_score_2'] = df_score['pct_score']*df_score['norm_best_seq_score']
         #df_score['final_score_2'] = df_score[f'overall_signal']*df_score['norm_best_seq_score']
         df_score['raw_score'] = df_score['final_score_1'] + df_score['final_score_2']
@@ -298,10 +303,10 @@ def main():
         score_bkg = df_result['raw_score'][n_outliers:-n_outliers]
         mean_score_bkg = score_bkg.mean()
         std_score_bkg = score_bkg.std()
-        df_result['track_score'] = (df_result[f'raw_score'] - mean_score_bkg) / std_score_bkg
-        df_result['track_score'] = df_result[f'track_score']*target_std + 1
+        df_result['track_score'] = (df_result['raw_score'] - mean_score_bkg) / std_score_bkg
+        df_result['track_score'] = df_result['track_score']*target_std + 1
         df_result = df_result.sort_values(by='track_score', ascending=False)
-        df_result['log2_track_score'] = np.log2(df_result[f'track_score'].clip(lower=0.5))   
+        df_result['log2_track_score'] = np.log2(df_result['track_score'].clip(lower=0.5))   
 
         # 单边信号周围有更高分的，去掉
         # v2.1 后 cols_L, cols_R 要手动
@@ -340,29 +345,36 @@ def main():
         mu, std = norm.fit(score_for_fitting) 
         print('mean_score:{:.3f};std:{:.3f}'.format(mu,std))
         # pv and fdr
-        df_result['pv'] = df_result[f'log2_track_score'].apply( lambda x: norm.sf(x,loc=mu,scale=std) )
-        df_result['pv'].clip(lower=1e-320,inplace=True)
+        df_result['pv'] = df_result['log2_track_score'].apply( lambda x: norm.sf(x,loc=mu,scale=std) )
+        df_result['pv'] = df_result['pv'].clip(lower=1e-320)
         df_result['fdr'] = offtracker.fdr(df_result['pv'])
         df_result['rank'] = range(1,len(df_result)+1)
-        df_result.to_csv(output)        
+        df_result.to_csv(output)
+
+    output = f'Offtracker_result_{outname}.csv'
+    if (os.path.isfile(output))&(not args.overwrite):
+        print(f'skip {output} as the result exists')
+    else:
         # 2024.06.03. 以防 fdr<=fdr_thresh 滤掉了 track_score>=2 的位点
         bool_fdr = df_result['fdr']<=fdr_thresh
-        bool_score = df_result['track_score']>=2
-        df_output = df_result[bool_fdr|bool_score].copy()
+        bool_score = df_result['track_score']>=score_thresh
+        # 2025.06.05. BE可能会形成单边信号，导致 track_score 为负数，也保留
+        bool_neg_score = df_result['track_score']< -1
+        df_output = df_result[bool_fdr|bool_score|bool_neg_score].copy()
         if pattern_ctr != 'none':
             df_output = df_output[['target_location', 'best_strand','best_target','deletion','insertion','mismatch',
-                                   'exp_L_length', 'exp_R_length','ctr_L_length','ctr_R_length','L_length','R_length','signal_length',
-                                  'norm_best_seq_score','track_score', 'log2_track_score','fdr','rank']]
+                                'exp_L_length', 'exp_R_length','ctr_L_length','ctr_R_length','L_length','R_length','signal_length',
+                                'norm_best_seq_score','track_score', 'log2_track_score','fdr','rank']]
             df_output.columns = ['target_location', 'strand', 'target', 'deletion', 'insertion', 'mismatch', 
-                                 'exp_L_length', 'exp_R_length','ctr_L_length','ctr_R_length','L_length','R_length','signal_length',
-                                 'seq_score', 'track_score', 'log2_track_score','FDR', 'rank']
+                                'exp_L_length', 'exp_R_length','ctr_L_length','ctr_R_length','L_length','R_length','signal_length',
+                                'seq_score', 'track_score', 'log2_track_score','FDR', 'rank']
         else:
             df_output = df_output[['target_location', 'best_strand','best_target','deletion','insertion','mismatch',
-                                   'L_length', 'R_length','signal_length',
-                                  'norm_best_seq_score','track_score', 'log2_track_score','fdr','rank']]
+                                'L_length', 'R_length','signal_length',
+                                'norm_best_seq_score','track_score', 'log2_track_score','fdr','rank']]
             df_output.columns = ['target_location', 'strand', 'target', 'deletion', 'insertion', 'mismatch', 
-                                 'L_length', 'R_length','signal_length',
-                                 'seq_score', 'track_score', 'log2_track_score','FDR', 'rank']
+                                'L_length', 'R_length','signal_length',
+                                'seq_score', 'track_score', 'log2_track_score','FDR', 'rank']
         df_output.to_csv(f'Offtracker_result_{outname}.csv', index=False)
 
         if args.clean:

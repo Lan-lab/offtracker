@@ -26,10 +26,10 @@ def main():
     full_seq = gRNA + PAM
     
     df_result = pd.read_csv(args.result)
-    n_pos = len(df_result)
+    # n_pos = len(df_result)
 
     xoffplot.offtable(df_result, full_seq, length_pam = len(PAM), col_seq='target', threshold=2,
-                      title=f'{outname} ({n_pos} sites)',
+                      title=f'{outname}',
                       savefig=dir_savefig)
     
     return f'The plot is saved as {dir_savefig}'
