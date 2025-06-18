@@ -11,7 +11,7 @@ from setuptools import find_packages, setup, Command
 NAME = 'offtracker'
 DESCRIPTION = 'Tracking-seq data analysis'
 AUTHOR = 'Runda Xu'
-EMAIL = 'runda.xu@foxmail.com'
+EMAIL = 'xrd18@tsinghua.org.cn'
 URL = 'https://github.com/Lan-lab/offtracker'
 REQUIRES_PYTHON = '>=3.6.0'
 
@@ -47,9 +47,10 @@ setup(
     author_email=EMAIL,
     url=URL,
     python_requires=REQUIRES_PYTHON,
-    packages=find_packages(),
-    package_data={'offtracker': ['mapping/*']},
-    scripts = ['scripts/offtracker_config.py',
+    packages=['offtracker'],
+    package_data={'offtracker': ['snakefile/*','utility/*']},
+    scripts = ['scripts/offtracker_qc.py',
+               'scripts/offtracker_config.py',
                'scripts/offtracker_candidates.py',
                'scripts/offtracker_analysis.py',
                'scripts/offtracker_plot.py'],

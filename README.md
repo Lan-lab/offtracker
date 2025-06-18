@@ -1,6 +1,6 @@
-# OFF-TRACKER
+# Offtracker
 
-OFF-TRACKER is an end to end pipeline of Tracking-seq data analysis for detecting off-target sites of any genome editing tools that generate double-strand breaks (DSBs) or single-strand breaks (SSBs).
+Offtracker is an end to end pipeline of Tracking-seq data analysis for detecting off-target sites of any genome editing tools that generate double-strand breaks (DSBs) or single-strand breaks (SSBs).
 
 ## System requirements
 
@@ -10,13 +10,15 @@ OFF-TRACKER is an end to end pipeline of Tracking-seq data analysis for detectin
 ## Dependency
 
 ```bash
-# We recommend creating a new enviroment using mamba/conda to avoid compatibility problems
+# We recommend creating a new environment using mamba/conda to avoid compatibility problems
 # If you don't use mamba, just replace the code with conda 
-mamba create -n offtracker -c bioconda blast snakemake pybedtools
+# Windows systems may not be compatible with pybedtools.
+mamba create -n offtracker -c bioconda blast snakemake pybedtools deeptools chromap
 ```
 
 
 ## Installation 
+
 
 ```bash
 # Activate the environment
@@ -34,47 +36,92 @@ pip install .
 
 ## Before analyzing samples
 
+**Important: Do not use hard-masked genome.fa**, in which repeats are masked by capital Ns and reads should have been mapped to these region (e.g. MHC region) will be lost. Besides, the genome.fa **should not** contain alternate loci like chr2_KI270776v1_alt and chr6_GL000256v2_alt, which may cause multi-mappings and the reads may be discarded.
+
+For example, https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz is soft-masked genome with alternate loci. https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.masked.gz is hard-masked genome. **Do not** use these two as reference genome.
+
+http://cistrome.org/~galib/MAESTRO/references/scATAC/Refdata_scATAC_MAESTRO_GRCh38_1.1.0.tar.gz is the genome used for the example data.
+
 ```bash
+# The following command can be used to check whether alternate loci of chr6 are present in the reference genome.
+grep "^>chr6" genome.fa
+```
+
+```bash
+# Build chromap index (only need once for each genome)
+chromap -i -r /Your_Path_To_Reference/hg38_genome.fa \
+-o /Your_Path_To_Reference/hg38_genome.chromap.index
+
 # Build blast index (only need once for each genome)
 makeblastdb -input_type fasta -title hg38 -dbtype nucl -parse_seqids \
 -in /Your_Path_To_Reference/hg38_genome.fa \
 -out /Your_Path_To_Reference/hg38_genome.blastdb \
 -logfile /Your_Path_To_Reference/hg38_genome.blastdb.log
 
-# Build chromap index (only need once for each genome)
-chromap -i -r /Your_Path_To_Reference/hg38_genome.fa \
--o /Your_Path_To_Reference/hg38_genome.chromap.index
-
 # Generate candidate regions by sgRNA sequence (need once for each genome and sgRNA)
-# --name: the name of the sgRNA, which will be used in the following analysis
+# --name: a user-defined name of the sgRNA, which will be used in the following analysis.
 offtracker_candidates.py -t 8 -g hg38 \
 -r /Your_Path_To_Reference/hg38_genome.fa \
 -b /Your_Path_To_Reference/hg38_genome.blastdb \
 --name 'VEGFA2' --sgrna 'GACCCCCTCCACCCCGCCTC' --pam 'NGG' \
--o /Your_Path_To_Candidates
+-o /Your_Path_To_Candidates_Folder
 
+```
+
+
+## Quality control and adapter trimming
+
+```bash
+# Generate snakemake config file for quality control and adapter trimming.
+offtracker_qc.py -t 4 \
+-f /Your_Path_To_Input_Folder \
+--subfolder 0
+
+cd /Your_Path_To_Input_Folder/Trimmed_data
+snakemake -np # dry run to check whether everything is alright
+nohup snakemake --cores 16 1>${outdir}/sm_qc.log 2>&1 &
+
+"""
+Set “--subfolder 0” if the file structure is like: 
+| - Input_Folder
+  | - sample1_R1.fastq.gz
+  | - sample1_R2.fastq.gz
+  | - sample2_R1.fastq.gz
+  | - sample2_R2.fastq.gz
+Set “--subfolder 1” if the file structure is like:
+| - Input_Folder
+  | - Sample1_Folder
+    | - sample1_R1.fastq.gz
+    | - sample1_R2.fastq.gz
+  | - Sample2_Folder
+    | - sample2_R1.fastq.gz
+    | - sample2_R2.fastq.gz
+
+The script “offtracker_qc.py” will create a “Trimmed_data” folder under /Your_Path_To_Input_Folder. 
+If “-o /Your_Path_To_Output” is set, the output will be redirected to /Your_Path_To_Output.
+"""
 ```
 
 ## Strand-specific mapping of Tracking-seq data 
 
 ```bash
-# Generate snakemake config file 
-# --subfolder: If different samples are in seperate folders, set this to 1
+
+# Generate snakemake config file for mapping
 # Results will be generated in /Your_Path_To_Output, if -o is not set, the output will be in the same folder as the fastq files
 offtracker_config.py -t 8 -g hg38 --blacklist hg38 \
 -r /Your_Path_To_Reference/hg38_genome.fa \
 -i /Your_Path_To_Reference/hg38_genome.chromap.index \
--f /Your_Path_To_Fastq \
+-f /Your_Path_To_Trimmed_Data \
 -o /Your_Path_To_Output \ 
 --subfolder 0 
 
-# Warning: Do not contain "fastq" or "fq" in the folder name, otherwise the program will treat the folder as a fastq file
-# This problem will be fixed in the future version
+# Warning: Do not contain "fastq" or "fq" in the folder name, otherwise the program may treat the folder as a fastq file
+# This problem may be fixed in the future
 
 # Run the snakemake program
 cd /Your_Path_To_Fastq
 snakemake -np # dry run
-nohup snakemake --cores 16 1>snakemake.log 2>snakemake.err &
+nohup snakemake --cores 16 1>sm_mapping.log 2>sm_mapping.err &
 
 ## about cores
 # --cores of snakemake must be larger than -t of offtracker_config.py
@@ -89,7 +136,7 @@ nohup snakemake --cores 16 1>snakemake.log 2>snakemake.err &
 ## Analyzing the genome-wide off-target sites
 
 ```bash
-# In this part, multiple samples in the same condition can be analyzed in a single run by pattern recogonization of sample names
+# In this part, multiple samples in the same condition can be analyzed in a single run by pattern recognition of sample names
 
 offtracker_analysis.py -g hg38 --name "VEGFA2" \
 --exp 'Cas9_VEGFA2' \
@@ -118,19 +165,18 @@ offtracker_plot.py --result Your_Offtracker_Result_CSV \
 --sgrna 'GACCCCCTCCACCCCGCCTC' --pam 'NGG'
 
 # The default output is a pdf file with Offtracker_result_{outname}.pdf
-# Change the suffix of the output file to change the format (e.g.: .png)
+# Assigning a specific output file with another suffix can change the format. e.g., "--output Offtracker_plot.png" will generate a png file.
 # The orange dash line indicates the empirical threshold of Track score = 2
 # Empirically, the off-target sites with Track score < 2 are less likely to be real off-target sites.
 ```
 
 
-## Note1
+## Note1, when not using hg38 or mm10
 
-The default setting only includes chr1-chr22, chrX, chrY, and chrM. Please make sure the reference genome contains "chr" at the beginning. 
+The default setting only includes chr1-chr22, chrX, chrY, and chrM. (only suitable for human and mouse) \
+If you are using reference genomes without "chr" at the beginning, or want to analyze all chromosomes or other species, you can set "--ignore_chr" when running offtracker_config.py to skip chromosome filter.
 
-Currently, this software is only ready-to-use for mm10 and hg38. For any other genome, e.g., hg19, please add genome size file named "hg19.chrom.sizes" to .\offtracker\mapping and instal manually. Besides, add "--blacklist none" or "--blacklist Your_Blacklist" (e.g., ENCODE blacklist) when running offtracker_config.py, because we only provide blacklists for mm10 and hg38.
-
-If you have a requirement for species other than human/mouse, please post an issue.
+Currently, this software is only ready-to-use for mm10 and hg38. For any other genome, e.g., hg19, please add a genome size file named "hg19.chrom.sizes" to .\offtracker\utility. Besides, add "--blacklist none" or "--blacklist Your_Blacklist" (e.g., ENCODE blacklist) when running offtracker_config.py, because we only include blacklists for mm10 and hg38.
 
 ## Note2
 
@@ -141,7 +187,7 @@ It is strongly recommended to observe the "fw.scaled.bw" and "rv.scaled.bw" usin
 
 # Example Data
 
-Here are example data that contains reads of chr6 from HEK293T cells edited with Cas9 + sgRNA VEGFA2 and wild type cells:
+Here are example data that contains reads of chr6 from HEK293T cells edited with Cas9 + sgRNA VEGFA_site_2 (VEGFA2) and reads of chr6 from wild type HEK293T cells:
 
 https://figshare.com/articles/dataset/WT_HEK239T_chr6/25956034
 
@@ -163,7 +209,7 @@ These files can be visualized in genome browser like IGV:
 
 ![signal](https://github.com/Lan-lab/offtracker/blob/main/example_output/signals_example.png?raw=true)
 
-The signal (coverage) for each sample is normalized to 1e7/total_reads. As only reads mapping to chr6 were extracted in the example data, the signal range is higher than that of the whole genome. 
+The signal (coverage) for each sample is normalized to 1e7/total_reads. As only reads mapping to chr6 were extracted in the example data, the signal range is much higher than that of the whole genome samples. 
 
 ## Whole genome off-target analysis
 
