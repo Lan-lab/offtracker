@@ -219,6 +219,17 @@ After that, you can visualize the off-target sites with their genomic sequence (
 
 ![offtarget](https://github.com/Lan-lab/offtracker/blob/main/example_output/sequences_example.png?raw=true)
 
+
+After finishing the pipeline, if “chr6:31400832-31400854” and “chr6:31495044-31495066” are missing in the plot, it is most likely due to either:
+
+•	Using a hard-masked reference genome (where repeats are replaced with 'N's)
+
+•	The presence of alternate loci (e.g., chr6_GL000256v2_alt) in the genome.
+
+These two off-target sites locate in the region of MHC class I chain-related protein A and B (MICA and MICB), which is polymorphic (resulting in alternate loci in contigs like “chr6_GL000256v2_alt”) and contains interspersed repeats (resulting in sequences masked by capital 'N's in a hard-masked genome). Please try again with unmasked or soft-masked genome without alternate loci.
+
+
+
 # Citation
 
 If you use Tracking-seq or OFF-TRACKER in your research, please cite the following paper:
