@@ -1,4 +1,4 @@
-__version__ = "2.10.6"
+__version__ = "2.10.7"
 # 2023.08.11. v1.1.0	adding a option for not normalizing the bw file
 # 2023.10.26. v1.9.0	prerelease for v2.0
 # 2023.10.27. v2.0.0	大更新，还没微调
@@ -33,4 +33,4 @@ __version__ = "2.10.6"
 # 2025.04.25. v2.8.0	修复了 offtracker candidates 会把小写序列转换成 N 的 bug
 # 2025.05.22. v2.9.0	翻新部分代码结构
 # 2025.06.05. v2.10.0	增加了QC模块。保留了负数score的记录，并在plot时显示为红字。增加了 "--ignore_chr" 用于跳过common chr过滤。
-# 2025.06.17. v2.10.6   修复翻新代码结构导致的bug
+# 2025.06.17. v2.10.7   修复翻新代码结构导致的bug
