@@ -3,7 +3,8 @@ import math
 import pandas as pd
 from itertools import product
 import numpy as np
-import os, glob
+import os, glob, sys
+import polars as pl
 
 ambiguous_nt = {'A': ['A'],
                 'T': ['T'],
@@ -115,7 +116,7 @@ def add_ID(df, chr_col=0, midpoint='cleavage_site'):#, midpoint='midpoint'):
 
 
 
-def detect_fastq(folder, n_subfolder, NGS_type='paired-end'):
+def detect_fastq(folder, n_subfolder, NGS_type='paired-end', skip_trimmed=False):
     """
     搜索 folder 的 n级子目录下的所有 fastq/fastq.gz/fq/fq.gz 文件
     paired-end 模式 : 识别 2.fq/2.fastq 为 paired-end 的 R2 文件，并验证对应 R1 文件
@@ -151,6 +152,9 @@ def detect_fastq(folder, n_subfolder, NGS_type='paired-end'):
             fq_files = glob.glob( os.path.join(folder, n_subfolder*'*/', fastq ) )
             print(f'{len(fq_files)} {fastq[2:]} samples detected')
             files_R2.extend( fq_files )
+
+        if skip_trimmed:
+            files_R2 = [f for f in files_R2 if '_trimmed_2.fq.gz' not in f]
         #
         if len(files_R2) > 0:
             files_R2 = pd.Series(files_R2).sort_values().reset_index(drop=True)
@@ -243,6 +247,137 @@ def sgRNA_alignment(a_key, sgRNA, seq, frag_len, DNA_matrix=None, mismatch_score
     else:
         return [best_alignment.score, position_pct, target, target_location, deletion, insertion, mismatch]
 
+def sgRNA_alignment_new(a_key, sgRNA, seq, substitution_matrix=None, alphabet=None, 
+                   mismatch_score=0.01):
+    """
+    Perform local alignment using Bio.Align instead of deprecated pairwise2.
+    """
+    if substitution_matrix is None or alphabet is None:
+        substitution_matrix, alphabet = create_substitution_matrix(mismatch_score)
+    
+    # Create aligner
+    aligner = Align.PairwiseAligner()
+    aligner.substitution_matrix = Align.substitution_matrices.Array(
+        alphabet=alphabet, dims=2, data=substitution_matrix
+    )
+    aligner.open_gap_score = -2
+    aligner.extend_gap_score = -2
+    aligner.mode = 'local'
+    
+    try:
+        # Perform alignment
+        alignments = aligner.align(sgRNA, seq)
+
+        if not alignments:
+            # No alignment found, return default values
+            return [0, 0, '', f"{a_key.split(':')[0]}:0-0", 0, 0, len(sgRNA)]
+        
+        # Convert to list for indexing
+        alignments = list(alignments)
+         
+        # Extract alignment information
+        coords = alignments[0].coordinates
+        start_target = coords[1][0]
+        end_target = coords[1][-1]
+        
+        # Extract target sequence directly from coordinates
+        # target = seq[start_target:end_target]
+        
+        # Get aligned sequences for detailed analysis
+        alignment_str = str(alignments[0])
+        alignment_lines = alignment_str.split('\n')
+        if len(alignment_lines) >= 3:
+            aligned_sgrna = [x for x in alignment_lines[0].split(' ') if x != '']
+            aligned_genome = [x for x in alignment_lines[2].split(' ') if x != '']
+        else:
+            raise ValueError("Unexpected alignment format")
+        
+        assert int(aligned_sgrna[-1]) == len(sgRNA)
+        
+        # Calculate indels and mismatches
+        # deletion = RNA bulge
+        # insertion = DNA bulge
+        aligned_sgrna_seq = aligned_sgrna[-2]
+        aligned_genome_seq = aligned_genome[-2]
+        insertion = aligned_sgrna_seq.count('-') if '-' in aligned_sgrna_seq else 0
+        deletion = aligned_genome_seq.count('-') if '-' in aligned_genome_seq else 0
+        
+        # Count mismatches by comparing sequences directly
+        # mismatch = 0
+        # assert len(aligned_sgrna_seq) == len(aligned_genome_seq)
+        # for i in range(len(aligned_sgrna_seq)):
+        #     if (aligned_sgrna_seq[i] != aligned_genome_seq[i]) & (aligned_sgrna_seq[i] != 'N') & (aligned_genome_seq[i] != 'N'):
+        #         mismatch += 1
+
+        mismatch = round((alignments[0].score % 1)/mismatch_score)
+        
+        # Calculate target location
+        pos_st = int(a_key.split('-')[0].split(':')[1]) + 1
+        chr_name = a_key.split(':')[0]
+        target_st = pos_st + start_target
+        target_ed = pos_st + end_target - 1
+        target_location = f"{chr_name}:{target_st}-{target_ed}"
+        
+        score = alignments[0].score
+        
+        return [score, aligned_genome_seq, target_location, deletion, insertion, mismatch]
+            
+    except Exception as e:
+        print(f"Alignment error for {a_key}: {e}")
+        return [0, 0, '', f"{a_key.split(':')[0]}:0-0", 0, 0, len(sgRNA)]
+
+
+def get_seq(location, ref_fasta, return_df=False) -> dict:
+    """
+    根据 genome location 取序列
+    location 如果是 list, str 则形式为 "chr1:123456-123458" 或 ["chr1:123456-123458", "chr2:123456-123458"]
+    location 如果是 pd.DataFrame, pl.DataFrame 则默认前三列为 bed 格式
+    ref_fasta 是参考基因组 fasta 文件的路径
+    默认返回字典, key 是位置, value 是序列
+    如果 return_df 为 True, 则返回 pl.DataFrame, 第一列为位置, 第二列为序列
+
+    pybedtools 返回的序列实际上没有包括坐标 start 的那个碱基，这一点和 twoBitToFa 一样
+    但是 IGV/UCSC 等序列是包括 start 的碱基，blast 的结果也是包括 start 的
+    所以在后续分析时要注意这一点
+    """
+    if sys.platform[:3]=='win':
+        # windows 似乎装不了 pybedtools
+        raise ValueError('windows 似乎装不了 pybedtools')
+    else:
+        import pybedtools
+    #########
+    # 根据 genome location 取序列
+    #########
+    if isinstance(location,(list,str)):
+        bed_loc = bedfmt(location)
+    elif isinstance(location,pd.DataFrame):
+        bed_loc = location.iloc[:,:3]
+    elif isinstance(location,pl.DataFrame):
+        bed_loc = location[:,:3]
+    else:
+        raise ValueError('location must be a list, str or pd.DataFrame')
+    
+    fasta = pybedtools.example_filename(ref_fasta)
+    temp_bed = './temp_amp_loc.bed'
+    write_bed(bed_loc, temp_bed)
+    a = pybedtools.BedTool(temp_bed)
+    a = a.sequence(fi=fasta)
+    with open(a.seqfn, encoding='utf-8') as f:
+        dict_seq = {} # 定义一个空的字典
+        for line in f:
+            line = line.strip() # 去除末尾换行符
+            if line[0] == '>':
+                header = line[1:]
+            else:
+                sequence = line
+                dict_seq[header] = dict_seq.get(header,'') + sequence
+    
+    # remove temp_amp_loc.bed
+    os.remove(temp_bed)
+    if return_df:
+        return pl.DataFrame(list(dict_seq.items()), orient='row', schema={'location':pl.String,'sequence':pl.String})
+    else:
+        return dict_seq
 
 def combine_df(list_df, op = 'mean'):
     # df 行列、结构必须一模一样，非数字部分也一模一样，只有数字不同

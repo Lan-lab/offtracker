@@ -5,10 +5,21 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib import rcParams
 # 和用 plt.rcParams or matplotlib.rcParams 是一样的
-dict_rc = {
-    'pdf.fonttype': 42,
-    'font.family': ['Arial']
-}
+import sys
+if sys.platform[:3] == 'win':
+    dict_rc = {
+        'pdf.fonttype': 42,
+        'font.family': ['Arial']
+    }
+elif sys.platform[:5] == 'linux':
+    dict_rc = {
+        'pdf.fonttype': 42,
+        'font.family': ['Arial']
+    }
+else:
+    dict_rc = {
+        'pdf.fonttype': 42,
+    }
 rcParams.update(dict_rc)
 
 # 2024.06.03. offtable 添加 threshold 分界线，默认为 None，常用的是 2

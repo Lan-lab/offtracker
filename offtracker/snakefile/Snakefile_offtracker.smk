@@ -48,7 +48,7 @@ rule chromap:
         temp(os.path.join(_output_dir,"{sample}.chromapx.bed"))
     shell:
         """
-        chromap -l 3000 --low-mem --BED --remove-pcr-duplicates \
+        chromap -l 3000 --low-mem --BED --remove-pcr-duplicates --trim-adapters \
         --min-read-length 10 --allocate-multi-mappings \
         -x {params.index} -r {params.fasta} -t {threads} -1 {input.R1} -2 {input.R2} -o {output}
         """

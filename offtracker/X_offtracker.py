@@ -1,33 +1,74 @@
 
 import pandas as pd
+import polars as pl
 import numpy as np
-import os, sys
+import os, sys, re
+import offtracker.X_sequence as xseq
 sys.path.append( os.path.abspath(os.path.dirname(__file__)) )
 
 def fdr(p_vals):
     # Benjamini-Hochberg
     from scipy.stats import rankdata
     ranked_p_values = rankdata(p_vals)
-    fdr = p_vals * len(p_vals) / ranked_p_values
-    fdr[fdr > 1] = 1
-    return fdr
+    fdr_value = p_vals * len(p_vals) / ranked_p_values
+    fdr_value[fdr_value > 1] = 1
+    return fdr_value
 
-def dedup_two( df_loc, col_ID_1='ID_1', col_ID_2='ID_2'):
-    # 会根据 df_loc 的排序保留第一个 location
-    # dedup 结束后，剩下的 ID_1 + ID_2 并集可能会小于 dedup 前的并集
-    list_nondup = []
-    set_IDs = set()
-    df_IDs = df_loc[[col_ID_1,col_ID_2]]
-    for a_row in df_IDs.iterrows():
-        temp = a_row[1]
-        if (temp[col_ID_1] in set_IDs) or (temp[col_ID_2] in set_IDs):
-            # 只要有一ID出现过，即便另一ID没出现过，也不更新 set_IDs
-            list_nondup.append(False)
+
+def mark_regions_single_chr(dp, min_distance=1000):
+    unique_chr = dp['chr'].unique()
+    assert len(unique_chr) == 1
+    unique_chr = unique_chr[0]
+
+    # Initialize variables for marking regions
+    region_id = 1
+    current_start = None
+    current_end = None
+    marked_regions = []
+
+    for row in dp.iter_rows(named=True):
+        start, end = row['st'], row['ed']
+
+        if current_start is None:
+            # First region
+            current_start = start
+            current_end = end
+            marked_regions.append(f'{unique_chr}_region_{region_id}')
         else:
-            set_IDs.add(temp[col_ID_1])
-            set_IDs.add(temp[col_ID_2])
-            list_nondup.append(True)
-    return list_nondup
+            if start <= current_end + min_distance:
+                # Mark as the same region
+                marked_regions.append(f'{unique_chr}_region_{region_id}')
+            else:
+                # New region
+                region_id += 1
+                marked_regions.append(f'{unique_chr}_region_{region_id}')
+                current_start = start
+                current_end = end
+
+        current_end = max(current_end, end)
+
+    return dp.with_columns(region_index=pl.Series(marked_regions))
+
+
+
+
+
+# def dedup_two( df_loc, col_ID_1='ID_1', col_ID_2='ID_2'):
+#     # 会根据 df_loc 的排序保留第一个 location
+#     # dedup 结束后，剩下的 ID_1 + ID_2 并集可能会小于 dedup 前的并集
+#     list_nondup = []
+#     set_IDs = set()
+#     df_IDs = df_loc[[col_ID_1,col_ID_2]]
+#     for a_row in df_IDs.iterrows():
+#         temp = a_row[1]
+#         if (temp[col_ID_1] in set_IDs) or (temp[col_ID_2] in set_IDs):
+#             # 只要有一ID出现过，即便另一ID没出现过，也不更新 set_IDs
+#             list_nondup.append(False)
+#         else:
+#             set_IDs.add(temp[col_ID_1])
+#             set_IDs.add(temp[col_ID_2])
+#             list_nondup.append(True)
+#     return list_nondup
 
 def window_smooth(sr_smooth, window_size=3, times=1):
     window  = np.ones(window_size) / window_size
@@ -75,6 +116,29 @@ def target_signal(df_bdg_chr, chrom, cleavage_site, flank_max=100000, smooth_tim
                   binsize=100, flank_regions=[500,1000,2000,5000], 
                   length_bkg = 20000, length_binsize=1000, length_min_noise=0.2, n_std=1, 
                   end='end',start='start',value='residual', pct_offset=0.0):
+    """_summary_
+
+    Args:
+        df_bdg_chr (_type_): .bdg table with the same chromosome
+        chrom (_type_): chr name
+        cleavage_site (_type_): cleavage site
+        flank_max (int, optional): _description_. Defaults to 100000.
+        smooth_times (int, optional): _description_. Defaults to 1.
+        window_size (int, optional): _description_. Defaults to 3.
+        binsize (int, optional): _description_. Defaults to 100.
+        flank_regions (list, optional): _description_. Defaults to [500,1000,2000,5000].
+        length_bkg (int, optional): _description_. Defaults to 20000.
+        length_binsize (int, optional): _description_. Defaults to 1000.
+        length_min_noise (float, optional): _description_. Defaults to 0.2.
+        n_std (int, optional): _description_. Defaults to 1.
+        end (str, optional): _description_. Defaults to 'end'.
+        start (str, optional): _description_. Defaults to 'start'.
+        value (str, optional): _description_. Defaults to 'residual'.
+        pct_offset (float, optional): _description_. Defaults to 0.0.
+
+    Returns:
+        _type_: _description_
+    """
     # 输入数据必须是同一条染色体内的
     # 统计 flank regions 的个数
     # n_regions = len(flank_regions)
@@ -288,6 +352,25 @@ def target_signal(df_bdg_chr, chrom, cleavage_site, flank_max=100000, smooth_tim
 
 def target_signal_chunk(df_bdg_chr, df_alignment_chr, flank_max=100000, smooth_times = 1, window_size = 3, binsize=100, flank_regions=[500,1000,2000,5000], 
                         length_bkg = 20000, length_binsize=1000, length_min_noise=0.2, n_std=1, pct_offset=0.0):
+    """
+
+    Args:
+        df_bdg_chr (_type_): .bdg table with the same chromosome
+        df_alignment_chr (_type_): candidate sites
+        flank_max (int, optional): _description_. Defaults to 100000.
+        smooth_times (int, optional): _description_. Defaults to 1.
+        window_size (int, optional): _description_. Defaults to 3.
+        binsize (int, optional): _description_. Defaults to 100.
+        flank_regions (list, optional): _description_. Defaults to [500,1000,2000,5000].
+        length_bkg (int, optional): _description_. Defaults to 20000.
+        length_binsize (int, optional): _description_. Defaults to 1000.
+        length_min_noise (float, optional): _description_. Defaults to 0.2.
+        n_std (int, optional): _description_. Defaults to 1.
+        pct_offset (float, optional): _description_. Defaults to 0.0.
+
+    Returns:
+        _type_: _description_
+    """
     # 输入数据必须是同一条染色体内的
     list_target_all = []
     for a_row in df_alignment_chr.iterrows():
@@ -306,5 +389,275 @@ def target_signal_chunk(df_bdg_chr, df_alignment_chr, flank_max=100000, smooth_t
                         ['L_mean', 'R_mean','L_mean_pct_score','R_mean_pct_score','chr_cleavage',
                          'L_length', 'R_length', 'L_overall_signal', 'R_overall_signal', 'signal_length', 'overall_signal','proximal_signal','pct_score']
     return df_result
+
+
+
+
+
+
+
+
+
+
+
+############################################################################
+# 2025.08.08 新写的的基于 Bio.Align 的 local realign，用于局部修正脱靶位点坐标 #
+############################################################################
+def create_substitution_matrix(mismatch_score=0.01):
+    """
+    Create substitution matrix for DNA alignment using Bio.Align format.
+    """
+    alphabet = 'ATGCN'
+    matrix = np.full((len(alphabet), len(alphabet)), mismatch_score)
+    
+    # Set match scores
+    for i in range(len(alphabet)):
+        matrix[i][i] = 2.0
+    
+    # N matches with everything
+    n_idx = alphabet.index('N')
+    matrix[n_idx, :] = 2.0
+    matrix[:, n_idx] = 2.0
+    
+    return matrix, alphabet
+
+def sgRNA_alignment_new(a_key, sgRNA, seq, substitution_matrix=None, alphabet=None, 
+                   mismatch_score=0.01):
+    """
+    Perform local alignment using Bio.Align instead of deprecated pairwise2.
+    """
+    from Bio import Align
+    if substitution_matrix is None or alphabet is None:
+        substitution_matrix, alphabet = create_substitution_matrix(mismatch_score)
+    
+    # Create aligner
+    aligner = Align.PairwiseAligner()
+    aligner.substitution_matrix = Align.substitution_matrices.Array(
+        alphabet=alphabet, dims=2, data=substitution_matrix
+    )
+    aligner.open_gap_score = -2
+    aligner.extend_gap_score = -2
+    aligner.mode = 'local'
+    
+    try:
+        # Perform alignment
+        alignments = aligner.align(sgRNA, seq)
+
+        if not alignments:
+            # No alignment found, return default values
+            return [0, 0, '', f"{a_key.split(':')[0]}:0-0", 0, 0, len(sgRNA)]
+        
+        # Convert to list for indexing
+        alignments = list(alignments)
+         
+        # Extract alignment information
+        coords = alignments[0].coordinates
+        start_target = coords[1][0]
+        end_target = coords[1][-1]
+        
+        # Extract target sequence directly from coordinates
+        # target = seq[start_target:end_target]
+        
+        # Get aligned sequences for detailed analysis
+        alignment_str = str(alignments[0])
+        alignment_lines = alignment_str.split('\n')
+        if len(alignment_lines) >= 3:
+            aligned_sgrna = [x for x in alignment_lines[0].split(' ') if x != '']
+            aligned_genome = [x for x in alignment_lines[2].split(' ') if x != '']
+        else:
+            raise ValueError("Unexpected alignment format")
+        
+        assert int(aligned_sgrna[-1]) == len(sgRNA)
+        
+        # Calculate indels and mismatches
+        # deletion = RNA bulge
+        # insertion = DNA bulge
+        aligned_sgrna_seq = aligned_sgrna[-2]
+        aligned_genome_seq = aligned_genome[-2]
+        insertion = aligned_sgrna_seq.count('-') if '-' in aligned_sgrna_seq else 0
+        deletion = aligned_genome_seq.count('-') if '-' in aligned_genome_seq else 0
+        
+        # Count mismatches by comparing sequences directly
+        # mismatch = 0
+        # assert len(aligned_sgrna_seq) == len(aligned_genome_seq)
+        # for i in range(len(aligned_sgrna_seq)):
+        #     if (aligned_sgrna_seq[i] != aligned_genome_seq[i]) & (aligned_sgrna_seq[i] != 'N') & (aligned_genome_seq[i] != 'N'):
+        #         mismatch += 1
+
+        mismatch = round((alignments[0].score % 1)/mismatch_score)
+        
+        # Calculate target location
+        pos_st = int(a_key.split('-')[0].split(':')[1]) + 1
+        chr_name = a_key.split(':')[0]
+        target_st = pos_st + start_target
+        target_ed = pos_st + end_target - 1
+        target_location = f"{chr_name}:{target_st}-{target_ed}"
+        
+        score = alignments[0].score
+        
+        return [score, aligned_genome_seq, target_location, deletion, insertion, mismatch]
+            
+    except Exception as e:
+        print(f"Alignment error for {a_key}: {e}")
+        return [0, 0, '', f"{a_key.split(':')[0]}:0-0", 0, 0, len(sgRNA)]
+
+def local_realign(sgRNA_seq, fasta, PAM='NGG', PAM_loc='downstream'):
+    # 添加 PAM
+    if PAM_loc == 'downstream':
+        sgRNA_PAM_fw = sgRNA_seq + PAM
+    else:
+        sgRNA_PAM_fw = PAM + sgRNA_seq
+    sgRNA_PAM_rv = xseq.reverse_complement(sgRNA_PAM_fw)
+    list_args_fw=[]
+    list_args_rv=[]
+    for a_key, a_seq in fasta.items():
+        # 2025.04.25 修正大小写问题
+        a_seq = re.sub('[^ATCG]','N',a_seq.upper())
+        list_args_fw.append( [a_key, sgRNA_PAM_fw, a_seq])
+        list_args_rv.append( [a_key, sgRNA_PAM_rv, a_seq])
+    list_align_forward = [sgRNA_alignment_new(*args) for args in list_args_fw]
+    list_align_reverse = [sgRNA_alignment_new(*args) for args in list_args_rv]
+    #
+    df_align_forward = pd.DataFrame(list_align_forward, columns= ['fw_score', 'fw_target','fw_location','fw_deletion','fw_insertion','fw_mismatch'])
+    df_align_reverse = pd.DataFrame(list_align_reverse, columns= ['rv_score', 'rv_target','rv_location','rv_deletion','rv_insertion','rv_mismatch'])
+    df_align_reverse['rv_target'] = df_align_reverse['rv_target'].apply(xseq.reverse_complement)
+    df_candidate = pd.concat([df_align_forward,df_align_reverse],axis=1)
+    df_candidate['location'] = fasta.keys()
+    df_candidate['alignment_score'] = df_candidate[['fw_score','rv_score']].max(axis=1)
+    df_candidate['best_seq_score'] = df_candidate[['fw_score', 'rv_score']].max(axis=1)
+    df_candidate['best_strand'] = df_candidate[['fw_score', 'rv_score']].idxmax(axis='columns').replace({'fw_score':'+', 'rv_score':'-'})
+    df_candidate.loc[df_candidate['fw_score']==df_candidate['rv_score'],'best_strand']='equal_score'
+            
+    # GG check
+    # 2023.12.05 增加 cleavage_site 推测
+    list_best_target = []
+    list_best_location = []
+    list_cleavage_site = []
+    list_delete = []
+    list_insert = []
+    list_mismat = []
+    list_GG = []
+    for a_row in df_candidate.iterrows():
+        if a_row[1]['best_strand']=='+':
+            list_best_target.append(a_row[1]['fw_target'])
+            list_best_location.append(a_row[1]['fw_location'])
+            list_cleavage_site.append(int(a_row[1]['fw_location'].split('-')[1]) - 6)
+            list_delete.append(a_row[1]['fw_deletion'])
+            list_insert.append(a_row[1]['fw_insertion'])
+            list_mismat.append(a_row[1]['fw_mismatch'])
+            if a_row[1]['fw_target'][-2:]=='GG':
+                list_GG.append('OK')
+            else:
+                list_GG.append('NO')                     
+        elif a_row[1]['best_strand']=='-':
+            list_best_target.append(a_row[1]['rv_target'])
+            list_best_location.append(a_row[1]['rv_location'])
+            list_cleavage_site.append(int(a_row[1]['rv_location'].split('-')[0].split(':')[1]) + 5)
+            list_delete.append(a_row[1]['rv_deletion'])
+            list_insert.append(a_row[1]['rv_insertion'])
+            list_mismat.append(a_row[1]['rv_mismatch'])
+            if a_row[1]['rv_target'][-2:]=='GG':
+                list_GG.append('OK')
+            else:
+                list_GG.append('NO')  
+        else:
+            if a_row[1]['fw_target'][-2:]=='GG':
+                list_best_target.append(a_row[1]['fw_target'])
+                list_best_location.append(a_row[1]['fw_location'])
+                list_cleavage_site.append(int(a_row[1]['fw_location'].split('-')[1]) - 6)
+                list_delete.append(a_row[1]['fw_deletion'])
+                list_insert.append(a_row[1]['fw_insertion'])
+                list_mismat.append(a_row[1]['fw_mismatch'])
+                list_GG.append('OK_same_score')
+            # 发现没有 GG 则看 RC
+            elif a_row[1]['rv_target'][-2:]=='GG':
+                list_best_target.append(a_row[1]['rv_target'])
+                list_best_location.append(a_row[1]['rv_location'])
+                list_cleavage_site.append(int(a_row[1]['rv_location'].split('-')[0].split(':')[1]) + 5)
+                list_delete.append(a_row[1]['rv_deletion'])
+                list_insert.append(a_row[1]['rv_insertion'])
+                list_mismat.append(a_row[1]['rv_mismatch'])
+                list_GG.append('OK_same_score')
+            else:
+                list_best_target.append(a_row[1]['fw_target'])
+                list_best_location.append(a_row[1]['fw_location'])
+                list_cleavage_site.append(int(a_row[1]['fw_location'].split('-')[1]) - 6)
+                list_delete.append(a_row[1]['fw_deletion'])
+                list_insert.append(a_row[1]['fw_insertion'])
+                list_mismat.append(a_row[1]['fw_mismatch'])                    
+                list_GG.append('NO_same_score')
+    # 记入 df_candidate
+    df_candidate['deletion'] = list_delete
+    df_candidate['insertion'] = list_insert
+    df_candidate['mismatch'] = list_mismat
+    df_candidate['GG'] = list_GG
+    df_candidate['best_target'] = list_best_target
+    df_candidate['target_location'] = list_best_location
+    df_candidate['cleavage_site'] = list_cleavage_site
+    df_candidate = pd.concat([xseq.bedfmt(df_candidate['target_location']), df_candidate], axis=1)
+
+    return df_candidate
+
+def left_realign(dp_bdg_chr, loc_shift_left, ref_fasta, sgRNA_seq, PAM, PAM_loc, n_iter):
+    # print(loc_shift_left)
+    fasta = xseq.get_seq(loc_shift_left, ref_fasta)
+    df_candidate = local_realign(sgRNA_seq, fasta, PAM, PAM_loc)
+    sr_candidate = df_candidate.iloc[0].copy()
+    chrom = sr_candidate['chr']
+    cleavage_site = sr_candidate['cleavage_site']
+    flank_regions = [500]
+    signals = target_signal(dp_bdg_chr.to_pandas(), chrom, cleavage_site, flank_regions=flank_regions)
+    L_neg_1000 = signals[2]
+    R_neg_1000 = signals[5]
+    # 如果右侧范围变负数了，说明过头了
+    if R_neg_1000 < 0:
+        sr_candidate.loc['realign'] = 'fail'
+        return sr_candidate
+
+    # 计算左移后的 L_neg_1000，如果还是负数则迭代，最多迭代 10 次
+    if L_neg_1000 < 0:
+        st = sr_candidate['st']
+        ed = sr_candidate['ed']
+        loc_shift_left = f'{chrom}:{int(st)-1000}-{int(ed)-20}'
+        n_iter += 1
+        if n_iter < 10:
+            return left_realign(dp_bdg_chr, loc_shift_left, ref_fasta, sgRNA_seq, PAM, PAM_loc, n_iter)
+        else:
+            sr_candidate.loc['realign'] = 'fail'
+            return sr_candidate
+    else:
+        sr_candidate.loc['realign'] = 'success'
+        return sr_candidate
+
+def right_realign(dp_bdg_chr, loc_shift_right, ref_fasta, sgRNA_seq, PAM, PAM_loc, n_iter):
+    # print(loc_shift_right)
+    fasta = xseq.get_seq(loc_shift_right, ref_fasta)
+    df_candidate = local_realign(sgRNA_seq, fasta, PAM, PAM_loc)
+    sr_candidate = df_candidate.iloc[0].copy()
+    chrom = sr_candidate['chr']
+    cleavage_site = sr_candidate['cleavage_site']
+    flank_regions = [500]
+    signals = target_signal(dp_bdg_chr.to_pandas(), chrom, cleavage_site, flank_regions=flank_regions)
+    L_neg_1000 = signals[2]
+    R_neg_1000 = signals[5]
+    # 如果左侧范围变负数了，说明过头了
+    if L_neg_1000 < 0:
+        sr_candidate.loc['realign'] = 'fail'
+        return sr_candidate
+
+    # 计算右移后的 R_neg_1000，如果还是负数则迭代，最多迭代 10 次
+    if R_neg_1000 < 0:
+        st = sr_candidate['st']
+        ed = sr_candidate['ed']
+        loc_shift_right = f'{chrom}:{int(st)+20}-{int(ed)+1000}'
+        n_iter += 1
+        if n_iter < 10:
+            return right_realign(dp_bdg_chr, loc_shift_right, ref_fasta, sgRNA_seq, PAM, PAM_loc, n_iter)
+        else:
+            sr_candidate.loc['realign'] = 'fail'
+            return sr_candidate
+    else:
+        sr_candidate.loc['realign'] = 'success'
+        return sr_candidate
 
 

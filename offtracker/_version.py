@@ -1,4 +1,4 @@
-__version__ = "2.10.7"
+__version__ = "2.14.5"
 # 2023.08.11. v1.1.0	adding a option for not normalizing the bw file
 # 2023.10.26. v1.9.0	prerelease for v2.0
 # 2023.10.27. v2.0.0	大更新，还没微调
@@ -33,4 +33,18 @@ __version__ = "2.10.7"
 # 2025.04.25. v2.8.0	修复了 offtracker candidates 会把小写序列转换成 N 的 bug
 # 2025.05.22. v2.9.0	翻新部分代码结构
 # 2025.06.05. v2.10.0	增加了QC模块。保留了负数score的记录，并在plot时显示为红字。增加了 "--ignore_chr" 用于跳过common chr过滤。
-# 2025.06.17. v2.10.7   修复翻新代码结构导致的bug
+# 2025.06.17. v2.10.7	修复翻新代码结构导致的bug
+# 2025.06.27. v2.10.8	将 chmod 放在了 setup.py 里
+# 2025.06.28. v2.10.9	现在 pip 都是从 wheel 安装，不再运行 setup.py，所以增加一个 offtracker_init.py
+# 2025.06.28. v2.10.10	直接塞 script 里试试
+# 2025.06.28. v2.10.11	回滚到2.10.9外加修正
+# 2025.07.02. v2.11.4	基于 blast 的缺陷更新 candidates，去除 quick mode
+# 2025.07.04. v2.11.5	offtracker_analysis 提前 skip 已有结果的样本
+# 2025.07.04. v2.12.2	新增 region_index 标记区域，用于更好的去重
+# 2025.07.18. v2.12.3	新增QC自动避免重复读取 trimmed fastq files
+# 2025.08.08. v2.13.0	测试 local realign 功能
+# 2025.08.09. v2.13.1	测试 correction 功能
+# 2025.08.09. v2.13.2	chromap + trim 参数
+# 2025.10.05. v2.14.0	添加 threads 监控，在 offtracker_config.py 中添加 --cpu_help 选项进入互动模式，推荐 CPU 参数。
+# 2025.10.05. v2.14.1	修正小问题。
+# 2025.10.06. v2.14.5	修正依赖和bug。
