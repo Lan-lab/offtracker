@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import io
-import os
-import sys
-from shutil import rmtree
-from setuptools import find_packages, setup, Command
+import io, os
+# import sys
+# from shutil import rmtree
+from setuptools import setup
+
 
 #
 NAME = 'offtracker'
@@ -26,7 +26,8 @@ with open(os.path.join(here, package_folder, '_version.py'),'r',encoding='utf-8'
 
 # requirements
 REQUIRED = [
-    'biopython', 'pybedtools', 'pyyaml', 'pandas', 'numpy',
+   'pandas', 'polars>=1.19.0', 'numpy', 'scipy', 'matplotlib', 'biopython<=1.85', 'pybedtools', 'pyarrow', 'pyyaml', 'psutil',
+   # 'os','sys','re', 'glob', 'time','itertools','argparse', 'multiprocessing', 'shutil', 'yaml', 'math'
 ]
 ## pybedtools may be not supported in Windows
 
@@ -49,11 +50,13 @@ setup(
     python_requires=REQUIRES_PYTHON,
     packages=['offtracker'],
     package_data={'offtracker': ['snakefile/*','utility/*']},
-    scripts = ['scripts/offtracker_qc.py',
-               'scripts/offtracker_config.py',
-               'scripts/offtracker_candidates.py',
-               'scripts/offtracker_analysis.py',
-               'scripts/offtracker_plot.py'],
+    scripts = [ 'scripts/offtracker_init.py',
+                'scripts/offtracker_qc.py',
+                'scripts/offtracker_config.py',
+                'scripts/offtracker_candidates.py',
+                'scripts/offtracker_analysis.py',
+                'scripts/offtracker_correction.py',
+                'scripts/offtracker_plot.py'],
     install_requires=REQUIRED,
     include_package_data=True
 )

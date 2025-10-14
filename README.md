@@ -2,22 +2,25 @@
 
 Offtracker is an end to end pipeline of Tracking-seq data analysis for detecting off-target sites of any genome editing tools that generate double-strand breaks (DSBs) or single-strand breaks (SSBs).
 
-## System requirements
+We provide two approaches for using Offtracker: 
+
+## (Option A) Install Offtracker on a Linux system
+
+### System requirements
 
 * Linux/Unix 
 * Python >= 3.6
 
-## Dependency
+### Dependency
 
 ```bash
 # We recommend creating a new environment using mamba/conda to avoid compatibility problems
 # If you don't use mamba, just replace the code with conda 
 # Windows systems may not be compatible with pybedtools.
-mamba create -n offtracker -c bioconda blast snakemake pybedtools deeptools chromap
+mamba create -n offtracker -c bioconda blast snakemake pybedtools deeptools chromap polars pyarrow fastp multiqc
 ```
 
-
-## Installation 
+### Installation 
 
 
 ```bash
@@ -26,21 +29,45 @@ conda activate offtracker
 
 # Direct installation with pip
 pip install offtracker
-
-# (Alternative) Download the offtracker from github
-git clone https://github.com/Lan-lab/offtracker.git 
-cd offtracker
-pip install .
 ```
+
+
+## (Option B) Run Offtracker in a container with the Docker image
+
+### Pull the latest Docker image of Offtracker.
+```bash
+docker pull docker.io/runda/offtracker:latest
+```
+If there is a network problem with this source, we provide an alternative source:
+```bash
+docker pull crpi-zdn7wihslct7zx5g.cn-shanghai.personal.cr.aliyuncs.com/rd6/offtracker:latest
+```
+
+### Run a container with an interactive Bash Shell using the image
+```bash
+docker run -it --rm -v YOUR_WORKING_DIRECTORY:/workspace docker.io/runda/offtracker:latest bash
+```
+Note that your working directory has been renamed to /workspace in the container. If you are using a Linux system, file ownership issues may be solved by adding -u "$(id -u):$(id -g)" when running the container (do not add this when using a Windows system):
+```bash
+docker run -it --rm -u "$(id -u):$(id -g)" -v YOUR_WORKING_DIRECTORY:/workspace docker.io/runda/offtracker:latest bash
+```
+
+Run all subsequent codes inside the container, and enter “exit” to exit when finished.
 
 
 ## Before analyzing samples
 
-**Important: Do not use hard-masked genome.fa**, in which repeats are masked by capital Ns and reads should have been mapped to these region (e.g. MHC region) will be lost. Besides, the genome.fa **should not** contain alternate loci like chr2_KI270776v1_alt and chr6_GL000256v2_alt, which may cause multi-mappings and the reads may be discarded.
+**Important: Do not use hard-masked genome.fa**, in which repeats are masked by capital Ns and reads should have been mapped to these region (e.g. MHC region) will be lost. Besides, the genome.fa **should not contain alternate loci** like chr2_KI270776v1_alt and chr6_GL000256v2_alt, which may cause multi-mappings and the reads may be discarded.
 
-For example, https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz is soft-masked genome with alternate loci. https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.masked.gz is hard-masked genome. **Do not** use these two as reference genome.
+
+**!! Do not use any of these two .fa files !!** \
+For example, https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz is soft-masked genome with alternate loci. https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.masked.gz is hard-masked genome. **Do not** use these two as reference genome. \
+**!! Do not use any of these two .fa files !!** 
+
+
 
 http://cistrome.org/~galib/MAESTRO/references/scATAC/Refdata_scATAC_MAESTRO_GRCh38_1.1.0.tar.gz is the genome used for the example data.
+
 
 ```bash
 # The following command can be used to check whether alternate loci of chr6 are present in the reference genome.
@@ -65,6 +92,9 @@ offtracker_candidates.py -t 8 -g hg38 \
 -b /Your_Path_To_Reference/hg38_genome.blastdb \
 --name 'VEGFA2' --sgrna 'GACCCCCTCCACCCCGCCTC' --pam 'NGG' \
 -o /Your_Path_To_Candidates_Folder
+
+# If analyzing Cas12a, whose pam is upstream of the sgRNA, add this:
+--pam_location 'upstream'
 
 ```
 
@@ -105,7 +135,6 @@ If “-o /Your_Path_To_Output” is set, the output will be redirected to /Your_
 ## Strand-specific mapping of Tracking-seq data 
 
 ```bash
-
 # Generate snakemake config file for mapping
 # Results will be generated in /Your_Path_To_Output, if -o is not set, the output will be in the same folder as the fastq files
 offtracker_config.py -t 8 -g hg38 --blacklist hg38 \
@@ -127,6 +156,9 @@ nohup snakemake --cores 16 1>sm_mapping.log 2>sm_mapping.err &
 # --cores of snakemake must be larger than -t of offtracker_config.py
 # parallel number = cores/t
 
+## --cpu_help
+# To simplify parameter selection, users can add the “--cpu_help” option when running "offtracker_config.py". This option detects and shows the available memory and CPU threads of the current machine. Based on this information, users can input the maximum memory and CPU threads they wish to allocate. The script then automatically calculates the recommended number of parallel tasks, threads per task, and total CPU cores.
+
 ## about output
 # This part will generate "*.fw.scaled.bw" and ".rv.scaled.bw" for IGV visualization
 # "*.fw.bed" and "*.rv.bed" are used in the next part.
@@ -141,7 +173,7 @@ nohup snakemake --cores 16 1>sm_mapping.log 2>sm_mapping.err &
 offtracker_analysis.py -g hg38 --name "VEGFA2" \
 --exp 'Cas9_VEGFA2' \
 --control 'WT' \
---outname 'Cas9_VEGFA_293' \
+--outname 'Cas9_VEGFA2_293T' \
 -f /Your_Path_To_Output \
 --seqfolder /Your_Path_To_Candidates
 
@@ -193,6 +225,14 @@ https://figshare.com/articles/dataset/WT_HEK239T_chr6/25956034
 
 It takes about 5-10 minutes to run the mapping (offtracker_config.py & snakemake) of example data with -t 8 and --cores 16 (2 parallel tasks)
 
+To download the data with wget:
+```bash
+wget --user-agent="Mozilla" https://figshare.com/ndownloader/files/46770337 -O WT_HEK239T_chr6_1.fq.gz
+wget --user-agent="Mozilla" https://figshare.com/ndownloader/files/46770334 -O WT_HEK239T_chr6_2.fq.gz
+wget --user-agent="Mozilla" https://figshare.com/ndownloader/files/46775599 -O Cas9_VEGFA2_chr6_1.fq.gz
+wget --user-agent="Mozilla" https://figshare.com/ndownloader/files/46775602 -O Cas9_VEGFA2_chr6_2.fq.gz
+```
+
 ## Signal visualization
 
 After mapping, there will be 4 .bw files in the output folder:
@@ -232,7 +272,7 @@ These two off-target sites locate in the region of MHC class I chain-related pro
 
 # Citation
 
-If you use Tracking-seq or OFF-TRACKER in your research, please cite the following paper:
+If you use Tracking-seq or Offtracker in your research, please cite the following paper:
 
 Zhu, M., Xu, R., Yuan, J., Wang, J. et al. Tracking-seq reveals the heterogeneity of off-target effects in CRISPR–Cas9-mediated genome editing. Nat Biotechnol (2024). https://doi.org/10.1038/s41587-024-02307-y
 
