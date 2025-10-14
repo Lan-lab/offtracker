@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 
 import os,glob,sys,time,shutil
+import polars as pl
+
+# 2025.10.05. 添加 threads 监测
 
 if sys.version_info < (3,0):
     import platform
@@ -9,8 +12,7 @@ if sys.version_info < (3,0):
 
 import offtracker
 import offtracker.X_sequence as xseq
-script_dir = os.path.abspath(os.path.dirname(offtracker.__file__))
-script_folder= os.path.join(script_dir, 'mapping')
+
 
 import argparse
 import pandas as pd
@@ -22,24 +24,31 @@ def main():
     parser = argparse.ArgumentParser()
     parser.description='Analyze the Tracking-seq data.'
     parser.add_argument('-f','--folder'  , type=str, required=True,    nargs='+', help='Directory of the data folder.' )
-    parser.add_argument('--seqfolder'    , type=str, required=True,    help='folder containing df_candidate created by offtracker_cadidates.py.')
+    parser.add_argument('--seqfolder'    , type=str, default ='none',  help='folder containing df_candidate created by offtracker_cadidates.py.')
     parser.add_argument('--name'         , type=str, required=True,    help='custom name of the sgRNA' )
     parser.add_argument('--exp'          , type=str, default='all',    nargs='+', help='A substring mark in the name of experimental samples. The default is to use all samples other than control' )
     parser.add_argument('--control'      , type=str, default='none',   nargs='+', help='A substring mark in the name of control samples. The default is no control. "others" for all samples other than --exp.' )
-    parser.add_argument('--fdr'          , type=float, default=0.05,     help='FDR threshold for the final result. Default is 0.05.')
-    parser.add_argument('--score'        , type=float, default=1.9,        help='Track score threshold for the final result. Default is 1.9.')
+    parser.add_argument('--fdr'          , type=float, default=0.05,   help='FDR threshold for the final result. Default is 0.05.')
+    parser.add_argument('--score'        , type=float, default=1.9,    help='Track score threshold for the final result. Default is 1.9.')
     parser.add_argument('--smooth'       , type=int, default=1,        help='Smooth strength for the signal.')
     parser.add_argument('--window'       , type=int, default=3,        help='Window size for smoothing the signal.')
     parser.add_argument('--binsize'      , type=int, default=100,      help='Window size for smoothing the signal.')
     parser.add_argument('--flank_max'    , type=int, default=100000,   help='Maximun flanking distance from the candidate site.')
     parser.add_argument('--flank_regions', type=int, default=[1000,2000,3000,5000], nargs='+',help='flanking regions for calculating signal.')
     parser.add_argument('--SeqScorePower', type=float, default=4,      help='The seq score power' )
-    parser.add_argument('--CtrClip'      , type=float, default=-0.5,     help='The lower clip for control samples' )
+    parser.add_argument('--CtrClip'      , type=float, default=-0.5,   help='The lower clip for control samples' )
     parser.add_argument('-t','--thread'  , type=int, default=4,        help='Number of threads for parallel computing')
     parser.add_argument('-g','--genome'  , type=str, default='hg38',   help='File of chromosome sizes, or "hg38", "mm10" ')
     parser.add_argument('-o','--outdir'  , type=str, default='first',  help='The output folder. Default is the first folder of --folder' )
     parser.add_argument('--outname'      , type=str, default='same',   help='The suffix of output files. Default is the same --exp' )
     parser.add_argument('--signal_only'  , action='store_true', help='A developer option: stop before group analysis. ' )
+    # for offtracker_correction
+    parser.add_argument('--check_loc'    , action='store_true', help='New in v2.13, for other scripts. Do not use this option. ' )
+    parser.add_argument('--seqfile'      , type=str, default='none',   help='Assign a specific df_candidate file.')
+
+    # other parameters
+    # parser.add_argument('--individual_results', action='store_true', help='When multiple samples meet the exp pattern, only one merged result is generated.\n' \
+    #                                                                       'Set --individual_results to additionally output the individual result of each exp sample. ' )
     parser.add_argument('--overwrite'    , action='store_true', help='Whether to overwrite existed dataframes.' )
     parser.add_argument('--clean'        , action='store_true', help='Whether to remove temp files')
 
@@ -62,6 +71,21 @@ def main():
     seq_score_power = args.SeqScorePower
     n_threads  = args.thread
 
+    ################
+    # threads 监测 #
+    ################
+    import psutil
+    n_threads = args.thread
+    assert n_threads > 0, f'n_threads should be greater than 0, while {n_threads} is given.'
+    cpu_count_total = psutil.cpu_count(logical=True)  # 逻辑 CPU 总数（包括超线程）
+    if n_threads > cpu_count_total:
+        n_threads = cpu_count_total-1
+        print(f'n_threads is reset to {n_threads} due to the total number of threads ({cpu_count_total}).')
+    if n_threads > 12:
+        n_threads = 12
+        print(f'n_threads is reset to {n_threads} as too many threads are unnecessary.')
+
+
     outdir = args.outdir
     if outdir == 'first':
         outdir = folders[0]
@@ -77,11 +101,16 @@ def main():
     
     # load df_candidate
     try:
-        df_candidate = pd.read_csv(os.path.join(args.seqfolder,f'df_candidate_{sgRNA_name}.csv'), index_col=0)
+        if args.seqfile != 'none':
+            df_candidate = pl.read_csv(args.seqfile).to_pandas()
+        elif args.seqfolder != 'none':
+            df_candidate = pl.read_csv(os.path.join(args.seqfolder,f'df_candidate_{sgRNA_name}.csv')).to_pandas()
+        else:
+            raise ValueError('Please provide --seqfolder or --seqfile')
         df_candidate.index = df_candidate['target_location']
         df_candidate_brief = df_candidate[['chr','st','ed','best_strand','best_target','best_seq_score',
                                  'deletion', 'insertion','mismatch', 'GG', 
-                                 'target_location', 'cleavage_site', 'ID_1','ID_2']]
+                                 'target_location', 'cleavage_site', 'region_index']] # 2025.07.06 添加 region_index, 去除 'ID_1','ID_2',
         df_candidate_sub = df_candidate[['chr','cleavage_site']]
     except FileNotFoundError:
         return 'Please run offtracker_candidates.py first and provide the correct directory with --seqfolder'
@@ -158,8 +187,11 @@ def main():
         if (os.path.isfile(output))&(not args.overwrite):
             print(output, 'exists, skipped')
             continue
-        df_bdg = xseq.read_bed(a_file)
-        df_bdg.columns = ['chr','start','end','residual']
+        # 2025.08.09. 改用 pl 读取加速
+        df_bdg = pl.read_csv(a_file, separator='\t', has_header=False,
+                             schema_overrides={'chr':pl.String,'start':pl.Int32,
+                                               'end':pl.Int32,'residual':pl.Float32}).to_pandas() # xseq.read_bed(a_file)
+        # df_bdg.columns = ['chr','start','end','residual']
         # 将 df_bdg 按照染色体分组
         sample_groups = df_bdg.groupby('chr')
         # 2024.06.03. fix a bug that df_bdg has less chr than df_candidate
@@ -191,7 +223,8 @@ def main():
 
     if args.signal_only:
         return 'signal_only is on, stop here.'
-    
+
+
     ####################
     ## group analysis ##
     ####################
@@ -202,6 +235,11 @@ def main():
             outname = pattern_exp
     else:
         outname = args.outname
+
+    # skip finished
+    output = f'Offtracker_result_{outname}.csv'
+    if (os.path.isfile(output))&(not args.overwrite):
+        return 'skip {output} as the result exists!'
 
     output = f'./temp/df_score_{outname}.csv'
     if (os.path.isfile(output))&(not args.overwrite):
@@ -293,11 +331,14 @@ def main():
         df_score['raw_score'] = df_score['final_score_1'] + df_score['final_score_2']
         df_score = df_score.sort_values('raw_score', ascending=False)    
 
-        # local dedup
-        list_nondup = offtracker.dedup_two(df_score,'ID_1','ID_2')
-        df_result = df_score[list_nondup].copy()
+        # # local dedup
+        # list_nondup = offtracker.dedup_two(df_score,'ID_1','ID_2')
+        # df_result = df_score[list_nondup].copy()
 
-        # 标准化分布      
+        # 2025.07.06 更新去重方式
+        df_result = df_score.drop_duplicates(subset=['region_index'], keep='first').copy()
+
+        # 标准化分布，2025.08.09
         target_std=0.15
         n_outliers = int(np.ceil(len(df_result)*0.01))
         score_bkg = df_result['raw_score'][n_outliers:-n_outliers]
@@ -306,7 +347,7 @@ def main():
         df_result['track_score'] = (df_result['raw_score'] - mean_score_bkg) / std_score_bkg
         df_result['track_score'] = df_result['track_score']*target_std + 1
         df_result = df_result.sort_values(by='track_score', ascending=False)
-        df_result['log2_track_score'] = np.log2(df_result['track_score'].clip(lower=0.5))   
+        df_result['log2_track_score'] = np.log2(df_result['track_score'].clip(lower=0.5))
 
         # 单边信号周围有更高分的，去掉
         # v2.1 后 cols_L, cols_R 要手动
@@ -351,34 +392,34 @@ def main():
         df_result['rank'] = range(1,len(df_result)+1)
         df_result.to_csv(output)
 
-    output = f'Offtracker_result_{outname}.csv'
-    if (os.path.isfile(output))&(not args.overwrite):
-        print(f'skip {output} as the result exists')
-    else:
+    if not args.check_loc:
+        output = f'Offtracker_result_{outname}.csv'
         # 2024.06.03. 以防 fdr<=fdr_thresh 滤掉了 track_score>=2 的位点
         bool_fdr = df_result['fdr']<=fdr_thresh
         bool_score = df_result['track_score']>=score_thresh
-        # 2025.06.05. BE可能会形成单边信号，导致 track_score 为负数，也保留
-        bool_neg_score = df_result['track_score']< -1
-        df_output = df_result[bool_fdr|bool_score|bool_neg_score].copy()
+        # 2025.06.05. BE可能会形成单边信号，但是很少见，如果 control 用的是别的 sgRNA 的样本，对应脱靶位置附近一般就是负数
+        # bool_neg_score = df_result['track_score']< -1
+        df_output = df_result[bool_fdr|bool_score].copy()
+        df_output = df_output[df_output['track_score']>1.75].copy()
         if pattern_ctr != 'none':
             df_output = df_output[['target_location', 'best_strand','best_target','deletion','insertion','mismatch',
                                 'exp_L_length', 'exp_R_length','ctr_L_length','ctr_R_length','L_length','R_length','signal_length',
                                 'norm_best_seq_score','track_score', 'log2_track_score','fdr','rank']]
-            df_output.columns = ['target_location', 'strand', 'target', 'deletion', 'insertion', 'mismatch', 
+            df_output.columns = ['target_location', 'strand', 'target', 'deletion', 'insertion', 'mismatch',
                                 'exp_L_length', 'exp_R_length','ctr_L_length','ctr_R_length','L_length','R_length','signal_length',
                                 'seq_score', 'track_score', 'log2_track_score','FDR', 'rank']
         else:
             df_output = df_output[['target_location', 'best_strand','best_target','deletion','insertion','mismatch',
                                 'L_length', 'R_length','signal_length',
                                 'norm_best_seq_score','track_score', 'log2_track_score','fdr','rank']]
-            df_output.columns = ['target_location', 'strand', 'target', 'deletion', 'insertion', 'mismatch', 
+            df_output.columns = ['target_location', 'strand', 'target', 'deletion', 'insertion', 'mismatch',
                                 'L_length', 'R_length','signal_length',
                                 'seq_score', 'track_score', 'log2_track_score','FDR', 'rank']
+    
         df_output.to_csv(f'Offtracker_result_{outname}.csv', index=False)
 
-        if args.clean:
-            shutil.rmtree('./temp')
+    if args.clean:
+        shutil.rmtree('./temp')
 
     return 'Done!'
     

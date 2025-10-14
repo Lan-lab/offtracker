@@ -5,6 +5,7 @@
 # 2023.12.06. v2.1: 2.1增加 cleavage_site 推测, 修正 deletion 错位, 以 cleavage_site 为中心
 # 2025.04.25. 修正大小写问题
 # 2025.06.11. 调整跳过已存在的candidates的代码顺序
+# 2025.10.05. 添加 threads 监测
 
 import os,sys,re,time
 from itertools import product, permutations
@@ -20,6 +21,7 @@ script_folder= os.path.join(script_dir, 'utility')
 
 import argparse
 import pandas as pd
+import polars as pl
 import pybedtools
 import multiprocessing as mp
 from Bio.Blast.Applications import NcbiblastnCommandline 
@@ -36,7 +38,7 @@ def main():
     parser.add_argument('-o','--outdir' , type=str, required=True, help='The output folder')
     parser.add_argument('-g','--genome' , type=str, default='hg38', help='File of chromosome sizes, or "hg38", "mm10" ')
     parser.add_argument('-t','--thread' , type=int, default=4,     help='Number of threads for parallel computing')
-    parser.add_argument('--quick_mode'  , action='store_true',  help='BLAST faster but less candidates.')
+    # parser.add_argument('--quick_mode'  , action='store_true',  help='Quick mode is deprecated due to blast flaw.')
 
     args = parser.parse_args()
     
@@ -56,7 +58,7 @@ def main():
         os.makedirs(dir_output)
     dir_ref_fa = args.ref
     blast_db   = args.blastdb
-    quick_mode = args.quick_mode
+    # quick_mode = args.quick_mode
     
     # parameters for alignment
     half_width = 100
@@ -86,20 +88,29 @@ def main():
     df_sgRNA_PAM = pd.DataFrame({'ID':ID,'sequence':possible_sgRNA_PAM})
     xseq.write_fasta(df_sgRNA_PAM, dir_sgRNA_fasta)
     
+    ################
+    # threads 监测 #
+    ################
+    import psutil
+    assert n_threads > 0, f'n_threads should be greater than 0, while {n_threads} is given.'
+    cpu_count_total = psutil.cpu_count(logical=True)  # 逻辑 CPU 总数（包括超线程）
+    if n_threads > cpu_count_total:
+        n_threads = cpu_count_total-1
+        print(f'n_threads is reset to {n_threads} due to the total number of threads ({cpu_count_total}).')
+    if n_threads > 16:
+        n_threads = 16
+        print(f'n_threads is reset to {n_threads} as too many threads are unnecessary.')
+
     #########
     # BLAST #
     #########
+    # 2025.07.02 基于 blast 的缺陷更新
+
     if os.path.isfile(dir_sgRNA_blast):
         print(f'{dir_sgRNA_blast} exists, skipped.')
     else:
-        if quick_mode:
-            print('Using quick mode for BLAST')
-            blastx_cline = NcbiblastnCommandline(query=dir_sgRNA_fasta, task='blastn-short',out=dir_sgRNA_blast,
-                                                db=blast_db, evalue=10000,outfmt=6, num_threads=n_threads,
-                                                gapopen=4, gapextend=2, reward=2, word_size=5, dust='no', soft_masking=False)
-        else:
-            blastx_cline = NcbiblastnCommandline(query=dir_sgRNA_fasta, task='blastn-short',out=dir_sgRNA_blast,
-                                                db=blast_db, evalue=10000,outfmt=6, num_threads=n_threads,
+        blastx_cline = NcbiblastnCommandline(query=dir_sgRNA_fasta, task='blastn-short',out=dir_sgRNA_blast,
+                                                db=blast_db, evalue=100000,outfmt=6, num_threads=n_threads,
                                                 gapopen=4, gapextend=2, reward=2, word_size=4, dust='no', soft_masking=False)   
         print(f'BLAST for candidate off-target sites of {sgRNA_name}.')
         blastx_cline()
@@ -109,33 +120,39 @@ def main():
     # Output bed #
     ##############
     
-    blast_regions = pd.read_csv(dir_sgRNA_blast, sep='\t',header=None)
+    # 2025.07.02 基于 blast 的缺陷更新
+    len_sgRNA = len(sgRNA_seq)
+    blast_regions = pl.read_csv(dir_sgRNA_blast, separator='\t',has_header=False)
     blast_regions.columns = ['query acc.','chr','% identity','alignment length','mismatches','gap opens','q. start','q. end','st','ed','evalue','bit score']
-    blast_regions = blast_regions[blast_regions.evalue<10000]
-    
-    # reverse strand 
-    blast_regions['reverse'] = (blast_regions['st']>blast_regions['ed']).astype(int)
-    blast_regions_f = blast_regions[blast_regions.reverse==0].copy()
-    blast_regions_r = blast_regions[blast_regions.reverse==1].copy()
-    temp = blast_regions_r['st'].copy()
-    blast_regions_r['st'] = blast_regions_r['ed']
-    blast_regions_r['ed'] = temp
-    blast_regions = pd.concat([blast_regions_f, blast_regions_r])
-    # sort and add location
-    blast_regions = blast_regions.sort_values('evalue').reset_index(drop=True)
-    blast_regions['location']=blast_regions['chr'].str[:] + ':' + blast_regions['st'].astype(str).str[:] + '-' + blast_regions['ed'].astype(str).str[:]
-    blast_regions = blast_regions.drop_duplicates(subset='location').copy()
-    
-    # alignment length 筛选
-    len_sgRNA=len(sgRNA_seq)
-    min_len = len_sgRNA-8
-    blast_regions = blast_regions[blast_regions['alignment length']>=min_len].copy().reset_index(drop=True)
-    blast_regions = blast_regions.reindex(columns = ['chr', 'st', 'ed' , 'query acc.', '% identity', 'alignment length', 'mismatches',
-        'gap opens', 'q. start', 'q. end', 'evalue', 'bit score', 'reverse', 'location'] )
-    
+
+    # reverse strand
+    blast_regions = blast_regions.with_columns((pl.col('st') > pl.col('ed')).cast(pl.Int8).alias('reverse'))
+    blast_regions_f = blast_regions.filter(pl.col('reverse') == 0)
+    blast_regions_r = blast_regions.filter(pl.col('reverse') == 1)
+    blast_regions_r = blast_regions_r.with_columns([
+        pl.col('ed').alias('st'),
+        pl.col('st').alias('ed')
+    ])
+    blast_regions = pl.concat([blast_regions_f, blast_regions_r])
+
+    # add location 
+    blast_regions = blast_regions.with_columns(
+        (pl.col('chr') + ':' + pl.col('st').cast(str) + '-' + pl.col('ed').cast(str)).alias('location')
+    )
+    # filter, sort, dedup
+    blast_regions = blast_regions.with_columns(mis=(len_sgRNA - 1 - pl.col('q. end')+pl.col('q. start')+pl.col('mismatches')+pl.col('gap opens')).cast(pl.Int8))
+    blast_regions = blast_regions.with_columns(mis2=(len_sgRNA - pl.col('alignment length')*pl.col('% identity')/100).round().cast(pl.Int8))
+    blast_regions = blast_regions.filter((pl.col('mis')<8)|(pl.col('mis2')<8))
+    blast_regions = blast_regions.sort('mis').unique('location',keep='first', maintain_order=True)
+    blast_regions = blast_regions.select([
+        'chr', 'st', 'ed', 'query acc.', '% identity', 'alignment length', 'mismatches',
+        'gap opens', 'q. start', 'q. end', 'evalue', 'bit score', 'reverse', 'location', 'mis', 'mis2'
+    ])
+
     # 输出 bed 用于后续 alignment score 计算
-    blast_regions_bed = blast_regions[['chr','st','ed']]
-    xseq.write_bed(blast_regions_bed, dir_sgRNA_bed)
+    blast_regions_bed = blast_regions.select(['chr', 'st', 'ed'])
+    blast_regions_bed.write_csv(dir_sgRNA_bed, separator='\t', include_header=False)
+
     # 对 bed 进行排序但不合并
     a = pybedtools.BedTool(dir_sgRNA_bed)
     a.sort(g=dir_chrom_sizes).saveas( dir_sgRNA_bed )
@@ -155,10 +172,10 @@ def main():
     bed_short = xseq.X_readbed(dir_sgRNA_bed)
     bed_short = bed_short[bed_short['chr'].isin(common_chr)].copy()
     bed_short['midpoint'] = ((bed_short['st'] + bed_short['ed'])/2).astype(int)
-    bed_short['st'] = bed_short['midpoint'] - half_width 
+    bed_short['st'] = bed_short['midpoint'] - half_width
     bed_short['ed'] = bed_short['midpoint'] + half_width
     bed_short.loc[bed_short['st']<0,'st']=0
-    bed_short = bed_short.drop_duplicates()        
+    bed_short = bed_short.drop_duplicates()
 
     #########
     # 根据 bed_f 位点 ed 前后 half_width 取基因组序列
@@ -303,7 +320,22 @@ def main():
     # df_candidate['midpoint'] = ((df_candidate['ed'] + df_candidate['st'])/2).astype(int)
     df_candidate = xseq.add_ID(df_candidate, midpoint='cleavage_site')
 
-    df_candidate.to_csv(dir_df_candidate)
+    # 2025.07.02 为了削弱 blast 缺陷增加了候选位点数量，这里过滤一下减少计算
+    df_candidate['mis_all'] = df_candidate[['mismatch','deletion','insertion']].sum(axis=1)
+    df_candidate = df_candidate[df_candidate['mis_all']<8]
+
+    # 2025.07.06 增加 region 标记用于去重
+    # 将 df_candidate 按照染色体分组
+    candidate_groups = df_candidate.groupby('chr')
+    # 定义一个空的列表，用于存储每个染色体的数据
+    list_dp = []
+    for chr_name, chr_candidate in candidate_groups:
+        dp_marked = offtracker.mark_regions_single_chr(pl.DataFrame(chr_candidate))
+        list_dp.append(dp_marked)
+    df_candidate = pl.concat(list_dp)
+
+    # 改成 pl 输出
+    df_candidate.write_csv(dir_df_candidate)
     print(f'Output df_candidate_{sgRNA_name}.csv')
     os.remove(temp_bed)
 
