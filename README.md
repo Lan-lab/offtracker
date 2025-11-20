@@ -65,8 +65,8 @@ For example, https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz 
 **!! Do not use any of these two .fa files !!** 
 
 
-
-http://cistrome.org/~galib/MAESTRO/references/scATAC/Refdata_scATAC_MAESTRO_GRCh38_1.1.0.tar.gz is the genome used for the example data.
+We provide a hg38.fa file including only common chromosomes (chr1-22, X, Y, M):
+https://figshare.com/ndownloader/files/58943119
 
 
 ```bash
