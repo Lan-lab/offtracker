@@ -65,8 +65,8 @@ For example, https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz 
 **!! Do not use any of these two .fa files !!** 
 
 
-We provide a soft-masked hg38.fa file including only common chromosomes (chr1-22, X, Y, M), modified from UCSC hg38:
-https://figshare.com/ndownloader/files/58943119
+We recommend the analysis set of hg38 for analysis:
+https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/analysisSet/hg38.analysisSet.fa.gz
 
 
 ```bash
